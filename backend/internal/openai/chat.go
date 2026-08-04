@@ -359,12 +359,24 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 			continue
 		}
 		if !strings.HasPrefix(line, "data: ") {
-			slog.Debug("SSE non-data line", "line", line)
 			continue
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			break
+		}
+
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			continue
+		}
+		if _, hasErr := raw["error"]; hasErr {
+			slog.Error("SSE stream error", "data", data)
+			select {
+			case <-ctx.Done():
+			case ch <- StreamEvent{Type: "error", Text: data}:
+			}
+			return
 		}
 
 		var chunk streamChunk

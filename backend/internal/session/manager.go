@@ -696,6 +696,13 @@ func (m *Manager) startLLMPipeline(
 					"function", event.FunctionName,
 					"user_text", userText,
 				)
+
+			case "error":
+				buf.Reset()
+				close(ttsQueue)
+				<-ttsDone
+				m.sendError("ai_error", "LLMからエラーが返されました。しばらくしてから再度お試しください。", true)
+				return
 			}
 		}
 	}()

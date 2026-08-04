@@ -1,0 +1,12 @@
+{
+  "description": "piper-plus 6-language base speaker ranges (ja/en/zh/es/fr/pt)",
+  "num_speakers": 571,
+  "ranges": [
+    { "language": "ja", "label": "日本語", "start": 0, "end": 19 },
+    { "language": "en", "label": "英語", "start": 20, "end": 329 },
+    { "language": "zh", "label": "中国語", "start": 330, "end": 471 },
+    { "language": "es", "label": "スペイン語", "start": 472, "end": 534 },
+    { "language": "fr", "label": "フランス語", "start": 535, "end": 562 },
+    { "language": "pt", "label": "ポルトガル語", "start": 563, "end": 570 }
+  ]
+}

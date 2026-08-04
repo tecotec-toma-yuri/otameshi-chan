@@ -1,0 +1,93 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    volumes:
+      - ./backend:/app
+      - go_mod_cache:/go/pkg/mod
+      - ./logs/backend:/app/logs
+    environment:
+      - LOG_PATH=${BACKEND_LOG_PATH:-logs/app.log}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    env_file:
+      - ./backend/.env
+    depends_on:
+      tts:
+        condition: service_healthy
+      voicevox:
+        condition: service_healthy
+      stt:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - ./logs/frontend:/app/logs
+    environment:
+      - LOG_PATH=${FRONTEND_LOG_PATH:-logs/frontend.log}
+    env_file:
+      - ./frontend/.env
+    depends_on:
+      - backend
+
+  tts:
+    build:
+      context: ./tts
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./tts/server.py:/app/server.py
+      - ./logs/tts:/app/logs
+    environment:
+      - LOG_PATH=${TTS_LOG_PATH:-logs/tts.log}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
+    ports:
+      - "50021:50021"
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:50021/version"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  stt:
+    build:
+      context: ./stt
+      dockerfile: Dockerfile
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./logs/stt:/logs
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - LOG_PATH=${STT_LOG_PATH:-/logs/stt.log}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  frontend_node_modules:
+  go_mod_cache:

@@ -141,17 +141,20 @@ func (c *ChatCompletionClient) SendUserMessage(ctx context.Context, text string)
 func (c *ChatCompletionClient) RequestGreeting(ctx context.Context) (<-chan StreamEvent, error) {
 	const instruction = "お客様が接続しました。おためしちゃんとして、1〜2文で明るく短く挨拶してください。商品の推薦や関数呼び出しはしないでください。"
 
+	cfg := config.Get()
 	c.mu.Lock()
-	messages := make([]ChatMessage, len(c.history), len(c.history)+1)
-	copy(messages, c.history)
-	messages = append(messages, ChatMessage{Role: "user", Content: instruction})
+	// Use base system prompt without interest guidelines for greeting
+	greetingMessages := []ChatMessage{
+		{Role: "system", Content: cfg.SystemPrompt},
+		{Role: "user", Content: instruction},
+	}
 	c.mu.Unlock()
 
 	ch := make(chan StreamEvent, 64)
 
 	go func() {
 		defer close(ch)
-		c.doStreamRequest(ctx, messages, ch, false)
+		c.doStreamRequest(ctx, greetingMessages, ch, false)
 	}()
 
 	return ch, nil

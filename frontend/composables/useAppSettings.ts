@@ -18,6 +18,8 @@ export interface AppConfig {
   tts_noise_w: number
   voicevox_speaker_id: number
   voicevox_speed_scale: number
+  stt_engine: string
+  stt_model: string
   stt_language: string
   stt_prompt: string
   products: ProductConfig[]
@@ -73,6 +75,8 @@ export function useAppSettings() {
     tts_noise_w: 0.8,
     voicevox_speaker_id: 3,
     voicevox_speed_scale: 1.0,
+    stt_engine: 'whisper',
+    stt_model: 'whisper-large-v3-turbo',
     stt_language: 'ja',
     stt_prompt: '',
     products: [],

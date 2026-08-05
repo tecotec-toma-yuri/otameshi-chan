@@ -298,16 +298,60 @@ onMounted(() => {
         <section class="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
           <div>
             <h2 class="text-base font-semibold text-gray-900">STT（音声認識）</h2>
-            <p class="text-sm text-gray-500 mt-1">Whisper に渡す言語コードです。「auto」で自動検出になり、検出された言語がTTSにも連携されます。</p>
+            <p class="text-sm text-gray-500 mt-1">音声認識エンジンと言語を設定します。変更は次のセッション接続から反映されます。</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">エンジン</label>
+            <select
+              v-model="config.stt_engine"
+              class="w-full sm:w-64 border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="whisper">faster-whisper（ローカル）</option>
+              <option value="groq">Groq（クラウド API）</option>
+            </select>
+            <p v-if="config.stt_engine === 'groq'" class="text-xs text-gray-400 mt-1">
+              Groq API を使用します。GROQ_API_KEY（または OPENAI_API_KEY）の設定が必要です。
+            </p>
+            <p v-else class="text-xs text-gray-400 mt-1">
+              ローカルの faster-whisper サーバーを使用します（CTranslate2 ベース、Opus/WebM 対応）
+            </p>
+          </div>
+          <div v-if="config.stt_engine === 'groq'">
+            <label class="block text-sm font-medium text-gray-700 mb-1">STT モデル</label>
+            <select
+              v-model="config.stt_model"
+              class="w-full sm:w-64 border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="whisper-large-v3-turbo">whisper-large-v3-turbo（推奨・高速）</option>
+              <option value="whisper-large-v3">whisper-large-v3（高精度）</option>
+              <option value="distil-whisper-large-v3-en">distil-whisper-large-v3-en（英語特化・最速）</option>
+            </select>
+            <p class="text-xs text-gray-400 mt-1">Groq で使用する Whisper モデルを選択します</p>
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">言語</label>
-            <input
+            <select
               v-model="config.stt_language"
-              type="text"
-              class="w-40 border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              placeholder="ja"
-            />
+              class="w-full sm:w-64 border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="auto">auto（自動検出）</option>
+              <option value="ja">日本語</option>
+              <option value="en">英語</option>
+              <option value="zh">中国語</option>
+              <option value="ko">韓国語</option>
+              <option value="fr">フランス語</option>
+              <option value="de">ドイツ語</option>
+              <option value="es">スペイン語</option>
+              <option value="pt">ポルトガル語</option>
+              <option value="it">イタリア語</option>
+              <option value="ru">ロシア語</option>
+              <option value="ar">アラビア語</option>
+              <option value="hi">ヒンディー語</option>
+              <option value="th">タイ語</option>
+              <option value="vi">ベトナム語</option>
+              <option value="id">インドネシア語</option>
+            </select>
+            <p class="text-xs text-gray-400 mt-1">「auto」で自動検出になり、検出された言語がTTSにも連携されます</p>
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Initial Prompt</label>

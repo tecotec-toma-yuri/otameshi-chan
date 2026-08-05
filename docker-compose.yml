@@ -78,6 +78,8 @@ services:
       - ./logs/stt:/logs
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-int8}
       - LOG_PATH=${STT_LOG_PATH:-/logs/stt.log}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     healthcheck:

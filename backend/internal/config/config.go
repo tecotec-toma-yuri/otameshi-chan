@@ -30,6 +30,8 @@ type Config struct {
 	TTSNoiseW         float64 `json:"tts_noise_w" yaml:"tts_noise_w"`
 	VoicevoxSpeakerID int     `json:"voicevox_speaker_id" yaml:"voicevox_speaker_id"`
 	VoicevoxSpeedScale float64 `json:"voicevox_speed_scale" yaml:"voicevox_speed_scale"`
+	STTEngine         string    `json:"stt_engine" yaml:"stt_engine"`
+	STTModel          string    `json:"stt_model" yaml:"stt_model"`
 	STTLanguage       string    `json:"stt_language" yaml:"stt_language"`
 	STTPrompt         string    `json:"stt_prompt" yaml:"stt_prompt"`
 	Products          []Product `json:"products" yaml:"products"`
@@ -64,6 +66,8 @@ func defaultConfig() Config {
 		TTSNoiseW:         envFloatOrDefault("TTS_NOISE_W", 0.8),
 		VoicevoxSpeakerID: envIntOrDefault("VOICEVOX_SPEAKER_ID", 3),
 		VoicevoxSpeedScale: envFloatOrDefault("VOICEVOX_SPEED_SCALE", 1.0),
+		STTEngine:         envOrDefault("STT_ENGINE", "whisper"),
+		STTModel:          envOrDefault("STT_MODEL", "whisper-large-v3-turbo"),
 		STTLanguage:       envOrDefault("STT_LANGUAGE", "ja"),
 		STTPrompt:         envOrDefault("STT_PROMPT", ""),
 		Products: []Product{

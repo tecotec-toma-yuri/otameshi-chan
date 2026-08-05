@@ -31,8 +31,13 @@ export function useSession() {
       pendingListeningTransition.value = false
       if (state.value === 'ai_speaking') {
         state.value = 'listening'
-        voiceInput.resumeListening()
       }
+    }
+  })
+
+  watch(state, (newState) => {
+    if (newState === 'ai_speaking' || newState === 'listening') {
+      voiceInput.resumeListening()
     }
   })
 
@@ -209,7 +214,6 @@ export function useSession() {
         if (msg.skipped) {
           clearLoadingUserMessages()
           state.value = 'listening'
-          voiceInput.resumeListening()
           break
         }
         {

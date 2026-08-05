@@ -1,18 +1,13 @@
 #!/bin/sh
 set -e
 
-MODEL_PATH="/models/ggml-${WHISPER_MODEL:-small}.bin"
+echo "Starting faster-whisper server (model=${WHISPER_MODEL:-small}, device=${WHISPER_DEVICE:-cpu}, compute_type=${WHISPER_COMPUTE_TYPE:-int8})"
 
-if [ ! -f "$MODEL_PATH" ]; then
-    echo "Model not found: $MODEL_PATH"
-    echo "Downloading ggml-${WHISPER_MODEL:-small}.bin..."
-    curl -fsSL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL:-small}.bin" \
-         -o "$MODEL_PATH"
-fi
-
-whisper-server \
-    --model "$MODEL_PATH" \
-    --host 0.0.0.0 \
-    --port 8888 \
+exec gunicorn \
+    --bind 0.0.0.0:8888 \
+    --workers 1 \
     --threads 4 \
+    --timeout 120 \
+    "server:app" \
+    --chdir /app \
     2>&1 | sh /log-pipe.sh

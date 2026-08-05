@@ -13,7 +13,7 @@ const (
 )
 
 // sentenceEnders contains Japanese punctuation that marks sentence boundaries.
-var sentenceEnders = []string{"。", "！", "？", "…"}
+var sentenceEnders = []string{"。", "、", "！", "？", "…"}
 
 // FlushCallback is called when the buffer has a complete sentence to emit.
 type FlushCallback func(text string)

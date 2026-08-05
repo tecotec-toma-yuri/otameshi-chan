@@ -9,30 +9,34 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
 )
 
-type WhisperSTT struct {
-	baseURL    string
-	language   string
+type GroqSTT struct {
+	apiKey     string
 	httpClient *http.Client
 }
 
-func NewWhisperSTT(baseURL string) *WhisperSTT {
-	return &WhisperSTT{
-		baseURL:  baseURL,
-		language: "ja",
+func NewGroqSTT() *GroqSTT {
+	apiKey := os.Getenv("GROQ_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+	return &GroqSTT{
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
 	}
 }
 
-func (w *WhisperSTT) Transcribe(ctx context.Context, audioData []byte) (TranscribeResult, error) {
+func (g *GroqSTT) Transcribe(ctx context.Context, audioData []byte) (TranscribeResult, error) {
 	started := time.Now()
+
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -45,15 +49,17 @@ func (w *WhisperSTT) Transcribe(ctx context.Context, audioData []byte) (Transcri
 	}
 
 	cfg := config.Get()
-	lang := cfg.STTLanguage
-	if lang == "" {
-		lang = w.language
+	sttModel := cfg.STTModel
+	if sttModel == "" {
+		sttModel = "whisper-large-v3-turbo"
 	}
-	if lang != "auto" {
-		_ = writer.WriteField("language", lang)
-	}
+	_ = writer.WriteField("model", sttModel)
 	_ = writer.WriteField("response_format", "verbose_json")
 	_ = writer.WriteField("temperature", "0.0")
+	lang := cfg.STTLanguage
+	if lang != "" && lang != "auto" {
+		_ = writer.WriteField("language", lang)
+	}
 
 	if cfg.STTPrompt != "" {
 		_ = writer.WriteField("prompt", cfg.STTPrompt)
@@ -61,38 +67,43 @@ func (w *WhisperSTT) Transcribe(ctx context.Context, audioData []byte) (Transcri
 
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.baseURL+"/inference", &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.groq.com/openai/v1/audio/transcriptions", &body)
 	if err != nil {
 		return TranscribeResult{}, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
 
-	resp, err := w.httpClient.Do(req)
+	resp, err := g.httpClient.Do(req)
 	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("whisper request failed: %w", err)
+		return TranscribeResult{}, fmt.Errorf("groq stt request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return TranscribeResult{}, fmt.Errorf("read response: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return TranscribeResult{}, fmt.Errorf("whisper returned %d: %s", resp.StatusCode, string(respBody))
+		return TranscribeResult{}, fmt.Errorf("groq stt returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
 		Text     string `json:"text"`
 		Language string `json:"language"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return TranscribeResult{}, fmt.Errorf("decode response: %w", err)
 	}
 
 	text := strings.TrimSpace(result.Text)
 	detectedLang := result.Language
-	if detectedLang == "" {
+	if detectedLang == "" && lang != "auto" {
 		detectedLang = lang
 	}
 
-	slog.Info("STT transcription",
+	slog.Info("STT transcription (Groq)",
 		"text", text,
 		"language", detectedLang,
 		"duration_ms", time.Since(started).Milliseconds(),

@@ -17,15 +17,12 @@ export function useVoiceInput(
 
   const noiseSuppression = useNoiseSuppression()
 
-  // Capture at 48kHz for RNNoise, downsample to 16kHz for STT
   const CAPTURE_RATE = 48000
-  const STT_RATE = 16000
 
   let pcmChunks: Float32Array[] = []
   let speechStarted = false
   let silenceFrames = 0
   const SILENCE_THRESHOLD = 0.015
-  // At 48kHz with bufferSize=2048: ~42fps, so 30 frames ≈ 700ms
   const SILENCE_FRAMES_REQUIRED = 30
   const MIN_SPEECH_FRAMES = 5
 
@@ -103,7 +100,7 @@ export function useVoiceInput(
 
         if (speechStarted && silenceFrames >= SILENCE_FRAMES_REQUIRED) {
           if (speechFrameCount >= MIN_SPEECH_FRAMES) {
-            resampleAndSend(pcmChunks)
+            encodeOpusAndSend(pcmChunks)
           }
           pcmChunks = []
           speechStarted = false
@@ -123,7 +120,7 @@ export function useVoiceInput(
 
   function stopListening() {
     if (speechStarted && speechFrameCount >= MIN_SPEECH_FRAMES && pcmChunks.length > 0) {
-      resampleAndSend(pcmChunks)
+      encodeOpusAndSend(pcmChunks)
     }
 
     pcmChunks = []
@@ -158,12 +155,11 @@ export function useVoiceInput(
     isListening.value = false
   }
 
-  async function resampleAndSend(chunks: Float32Array[]) {
+  async function encodeOpusAndSend(chunks: Float32Array[]) {
     let totalLen = 0
     for (const c of chunks) totalLen += c.length
     if (totalLen === 0) return
 
-    // Merge chunks into single buffer at 48kHz
     const merged = new Float32Array(totalLen)
     let pos = 0
     for (const c of chunks) {
@@ -171,20 +167,53 @@ export function useVoiceInput(
       pos += c.length
     }
 
-    // Use OfflineAudioContext for high-quality resampling 48kHz → 16kHz
-    const outLen = Math.ceil(totalLen * STT_RATE / CAPTURE_RATE)
-    const offlineCtx = new OfflineAudioContext(1, outLen, STT_RATE)
-    const buf = offlineCtx.createBuffer(1, totalLen, CAPTURE_RATE)
-    buf.getChannelData(0).set(merged)
-    const src = offlineCtx.createBufferSource()
-    src.buffer = buf
-    src.connect(offlineCtx.destination)
+    const ctx = new OfflineAudioContext(1, totalLen, CAPTURE_RATE)
+    const buffer = ctx.createBuffer(1, totalLen, CAPTURE_RATE)
+    buffer.getChannelData(0).set(merged)
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    const dest = ctx.destination
+    src.connect(dest)
     src.start()
+    const rendered = await ctx.startRendering()
 
-    const rendered = await offlineCtx.startRendering()
-    const resampled = rendered.getChannelData(0)
+    const playbackCtx = new AudioContext({ sampleRate: CAPTURE_RATE })
+    const streamDest = playbackCtx.createMediaStreamDestination()
+    const bufferSrc = playbackCtx.createBufferSource()
+    bufferSrc.buffer = rendered
+    bufferSrc.connect(streamDest)
 
-    const audioBase64 = encodeChunksToBase64([resampled])
+    const recorder = new MediaRecorder(streamDest.stream, {
+      mimeType: 'audio/webm;codecs=opus',
+      audioBitsPerSecond: 32000,
+    })
+
+    const recordedChunks: Blob[] = []
+    const done = new Promise<Blob>((resolve) => {
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data)
+      }
+      recorder.onstop = () => {
+        resolve(new Blob(recordedChunks, { type: 'audio/webm;codecs=opus' }))
+      }
+    })
+
+    recorder.start()
+    bufferSrc.start()
+
+    bufferSrc.onended = () => {
+      recorder.stop()
+      playbackCtx.close()
+    }
+
+    const blob = await done
+    const arrayBuf = await blob.arrayBuffer()
+    const bytes = new Uint8Array(arrayBuf)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i])
+    }
+    const audioBase64 = btoa(binary)
     onSpeechEnd(audioBase64)
   }
 
@@ -194,27 +223,6 @@ export function useVoiceInput(
       sum += data[i] * data[i]
     }
     return Math.sqrt(sum / data.length)
-  }
-
-  function encodeChunksToBase64(chunks: Float32Array[]): string {
-    let totalLength = 0
-    for (const c of chunks) totalLength += c.length
-
-    const pcm16 = new Int16Array(totalLength)
-    let offset = 0
-    for (const c of chunks) {
-      for (let i = 0; i < c.length; i++) {
-        const s = Math.max(-1, Math.min(1, c[i]))
-        pcm16[offset++] = s < 0 ? s * 0x8000 : s * 0x7FFF
-      }
-    }
-
-    const bytes = new Uint8Array(pcm16.buffer)
-    let binary = ''
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i])
-    }
-    return btoa(binary)
   }
 
   function updateVolume() {

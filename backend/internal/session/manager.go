@@ -1,11 +1,9 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -86,12 +84,30 @@ func newTTSService() tts.TTSService {
 }
 
 func newSTTService() stt.STTService {
-	if url := os.Getenv("STT_URL"); url != "" {
-		slog.Info("using Whisper STT", "url", url)
-		return stt.NewWhisperSTT(url)
+	cfg := config.Get()
+	engine := cfg.STTEngine
+	if engine == "" {
+		engine = os.Getenv("STT_ENGINE")
 	}
-	slog.Info("using stub STT (set STT_URL to use Whisper)")
-	return stt.NewStubSTT()
+	if engine == "" {
+		engine = "whisper"
+	}
+
+	switch engine {
+	case "groq":
+		slog.Info("using Groq STT")
+		return stt.NewGroqSTT()
+	case "whisper":
+		if url := os.Getenv("STT_URL"); url != "" {
+			slog.Info("using Whisper STT", "url", url)
+			return stt.NewWhisperSTT(url)
+		}
+		slog.Info("using stub STT (set STT_URL to use Whisper)")
+		return stt.NewStubSTT()
+	default:
+		slog.Info("unknown STT engine, using stub", "engine", engine)
+		return stt.NewStubSTT()
+	}
 }
 
 func newLLMClient() openai.RealtimeClient {
@@ -309,7 +325,7 @@ func (m *Manager) handleAudioSpeech(audioBase64 string) {
 		)
 
 		decodeStart := time.Now()
-		pcmData, err := base64.StdEncoding.DecodeString(audioBase64)
+		audioData, err := base64.StdEncoding.DecodeString(audioBase64)
 		if err != nil {
 			slog.Error("failed to decode audio", "error", err, "request_id", requestID)
 			m.sendError("stt_error", "音声データの処理に失敗しました", true)
@@ -317,19 +333,15 @@ func (m *Manager) handleAudioSpeech(audioBase64 string) {
 			return
 		}
 
-		wavData := pcmToWAV(pcmData, 16000, 1, 16)
-		audioDurationMs := len(pcmData) / (16000 * 2 / 1000) // 16-bit mono @ 16kHz
 		slog.Info("latency",
 			"request_id", requestID,
-			"stage", "decode_wav",
+			"stage", "decode_b64",
 			"duration_ms", time.Since(decodeStart).Milliseconds(),
-			"pcm_bytes", len(pcmData),
-			"wav_bytes", len(wavData),
-			"audio_duration_ms", audioDurationMs,
+			"audio_bytes", len(audioData),
 		)
 
 		sttStart := time.Now()
-		sttResult, err := m.sttService.Transcribe(context.Background(), wavData)
+		sttResult, err := m.sttService.Transcribe(context.Background(), audioData)
 		sttMs := time.Since(sttStart).Milliseconds()
 		if err != nil {
 			slog.Error("STT transcription failed", "error", err, "request_id", requestID, "stt_ms", sttMs)
@@ -352,7 +364,6 @@ func (m *Manager) handleAudioSpeech(audioBase64 string) {
 			"duration_ms", sttMs,
 			"text", text,
 			"language", sttResult.Language,
-			"audio_duration_ms", audioDurationMs,
 		)
 
 		if text == "" || isNoiseText(text) {
@@ -396,29 +407,6 @@ func (m *Manager) interruptIfBusy() {
 	m.state.Transition(StateListening)
 }
 
-func pcmToWAV(pcmData []byte, sampleRate, channels, bitsPerSample int) []byte {
-	dataLen := len(pcmData)
-	var buf bytes.Buffer
-
-	buf.WriteString("RIFF")
-	binary.Write(&buf, binary.LittleEndian, int32(36+dataLen))
-	buf.WriteString("WAVE")
-
-	buf.WriteString("fmt ")
-	binary.Write(&buf, binary.LittleEndian, int32(16))
-	binary.Write(&buf, binary.LittleEndian, int16(1)) // PCM
-	binary.Write(&buf, binary.LittleEndian, int16(channels))
-	binary.Write(&buf, binary.LittleEndian, int32(sampleRate))
-	binary.Write(&buf, binary.LittleEndian, int32(sampleRate*channels*bitsPerSample/8))
-	binary.Write(&buf, binary.LittleEndian, int16(channels*bitsPerSample/8))
-	binary.Write(&buf, binary.LittleEndian, int16(bitsPerSample))
-
-	buf.WriteString("data")
-	binary.Write(&buf, binary.LittleEndian, int32(dataLen))
-	buf.Write(pcmData)
-
-	return buf.Bytes()
-}
 
 func isNoiseText(text string) bool {
 	noisePatterns := []string{

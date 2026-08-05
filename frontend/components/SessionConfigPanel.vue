@@ -8,8 +8,6 @@ const emit = defineEmits<{
 const collapsed = ref(true)
 
 const recommendationMode = ref<'ai_driven' | 'sequential'>('ai_driven')
-const sequentialItemsJson = ref('[]')
-const sequentialIntervalSec = ref(30)
 const postBehavior = ref<'return_to_conversation' | 'ask_interest'>('return_to_conversation')
 
 function emitConfig() {
@@ -17,25 +15,13 @@ function emitConfig() {
     recommendation_mode: recommendationMode.value,
     post_recommendation_behavior: postBehavior.value,
   }
-
-  if (recommendationMode.value === 'sequential') {
-    try {
-      config.sequential_items = JSON.parse(sequentialItemsJson.value)
-    } catch {
-      config.sequential_items = []
-    }
-    config.sequential_interval_sec = sequentialIntervalSec.value
-  }
-
   emit('update:config', config)
 }
 
-// Emit on any change
-watch([recommendationMode, sequentialItemsJson, sequentialIntervalSec, postBehavior], () => {
+watch([recommendationMode, postBehavior], () => {
   emitConfig()
 })
 
-// Emit initial config
 onMounted(() => {
   emitConfig()
 })
@@ -60,7 +46,6 @@ onMounted(() => {
     </button>
 
     <div v-show="!collapsed" class="p-4 space-y-4 bg-white">
-      <!-- Recommendation mode -->
       <fieldset>
         <legend class="text-sm font-medium text-gray-700 mb-2">レコメンドモード</legend>
         <div class="space-y-2">
@@ -71,7 +56,7 @@ onMounted(() => {
               value="ai_driven"
               class="text-indigo-600"
             />
-            AI駆動 (会話に基づく推薦)
+            AI駆動 (興味度判定 → 商品推薦)
           </label>
           <label class="flex items-center gap-2 text-sm">
             <input
@@ -80,39 +65,14 @@ onMounted(() => {
               value="sequential"
               class="text-indigo-600"
             />
-            シーケンシャル (事前定義順)
+            シーケンシャル (推薦後に関連商品を連続紹介)
           </label>
         </div>
+        <p v-if="recommendationMode === 'sequential'" class="text-xs text-gray-400 mt-2">
+          各商品の「関連商品ID」に設定された商品を順に紹介します。設定画面で商品ごとに関連商品を指定してください。
+        </p>
       </fieldset>
 
-      <!-- Sequential-only fields -->
-      <template v-if="recommendationMode === 'sequential'">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">
-            商品リスト (JSON)
-          </label>
-          <textarea
-            v-model="sequentialItemsJson"
-            class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-            rows="3"
-            placeholder='[{"product_ids": ["P001", "P002"]}]'
-          />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">
-            推薦間隔 (秒)
-          </label>
-          <input
-            v-model.number="sequentialIntervalSec"
-            type="number"
-            min="5"
-            max="300"
-            class="w-24 border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-          />
-        </div>
-      </template>
-
-      <!-- Post recommendation behavior -->
       <fieldset>
         <legend class="text-sm font-medium text-gray-700 mb-2">推薦後の動作</legend>
         <div class="space-y-2">

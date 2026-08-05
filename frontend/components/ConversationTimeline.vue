@@ -110,7 +110,7 @@ function formatLatency(latency: NonNullable<ConversationMessage['latency']>) {
         </p>
 
         <!-- Inline product cards -->
-        <ProductCardList v-if="msg.products && msg.products.length > 0" :products="msg.products" />
+        <ProductCardList v-if="msg.products && msg.products.length > 0" :products="msg.products" :reason="msg.reason" />
       </div>
     </div>
   </div>

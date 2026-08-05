@@ -7,6 +7,7 @@ export interface ConversationMessage {
   text: string
   timestamp: Date
   products?: ProductInfo[]
+  reason?: string
   streaming?: boolean
   loading?: boolean
   latency?: LatencyInfo
@@ -137,12 +138,14 @@ export function useSession() {
             recStreamMsg.text = msg.transcript || '商品をおすすめします。'
             recStreamMsg.streaming = false
             recStreamMsg.products = msg.products
+            recStreamMsg.reason = msg.reason
           } else {
             messages.value.push({
               role: 'ai',
               text: msg.transcript || '商品をおすすめします。',
               timestamp: new Date(),
               products: msg.products,
+              reason: msg.reason,
             })
           }
         }

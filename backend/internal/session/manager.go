@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"os"
 	"sync"
 	"time"
@@ -45,11 +46,12 @@ type Manager struct {
 	cancelCurrent context.CancelFunc
 	generation    uint64
 
-	seqIndex        int
-	detectedLang    string
-	startedAt       time.Time
-	restoredHistory []openai.ChatMessage
-	closed          bool
+	seqIndex          int
+	detectedLang      string
+	startedAt         time.Time
+	restoredHistory   []openai.ChatMessage
+	closed            bool
+	interestTriggered bool
 }
 
 func newTTSService() tts.TTSService {
@@ -554,6 +556,18 @@ func (m *Manager) startLLMPipeline(
 			if !m.isCurrentGeneration(gen) {
 				return
 			}
+			// Filter out function call markup that some models emit as text content
+			clean := strings.TrimSpace(sentence)
+			if strings.Contains(clean, "**Function call:**") ||
+				strings.Contains(clean, "**Function Call:**") ||
+				strings.Contains(clean, "\"function\":") ||
+				strings.HasPrefix(clean, "{\"name\":") ||
+				strings.HasPrefix(clean, "**Response:**") {
+				return
+			}
+			// Strip "**Response:** " prefix if it's part of a normal sentence
+			sentence = strings.TrimPrefix(sentence, "**Response:** ")
+			sentence = strings.TrimPrefix(sentence, "**Response:**\n")
 			m.send(protocol.TypeTextDelta, protocol.TextDelta{Text: sentence})
 			// Enqueue for TTS synthesis
 			select {
@@ -670,9 +684,25 @@ func (m *Manager) startLLMPipeline(
 				}
 
 				llmMs := time.Since(llmStart).Milliseconds()
-				buf.Reset()
-				close(ttsQueue)
-				<-ttsDone
+
+				// When LLM returns text + tool_calls together (e.g. assess_interest),
+				// event.Text contains the cleaned conversation text. Flush it as a
+				// proper text_done so the frontend bubble finalizes correctly.
+				if event.Text != "" {
+					buf.Flush()
+					close(ttsQueue)
+					<-ttsDone
+
+					m.send(protocol.TypeTextDone, protocol.TextDone{
+						Text:    event.Text,
+						IsFinal: true,
+					})
+				} else {
+					buf.Reset()
+					close(ttsQueue)
+					<-ttsDone
+				}
+
 				ttsStart := time.Now()
 				m.handleFunctionCall(ctx, event)
 				resumed = true
@@ -706,44 +736,21 @@ func (m *Manager) isCurrentGeneration(gen uint64) bool {
 
 func (m *Manager) handleFunctionCall(ctx context.Context, event openai.StreamEvent) {
 	switch event.FunctionName {
+	case "assess_interest":
+		var args openai.AssessInterestArgs
+		if err := json.Unmarshal(event.FunctionArgs, &args); err != nil {
+			slog.Error("failed to parse assess_interest args", "error", err)
+			return
+		}
+		m.handleAssessInterest(ctx, args)
+
 	case "recommend_product":
 		var args openai.RecommendProductArgs
 		if err := json.Unmarshal(event.FunctionArgs, &args); err != nil {
 			slog.Error("failed to parse recommend_product args", "error", err)
 			return
 		}
-
-		products := catalog.GetProducts(args.ProductIDs)
-		productInfos := make([]protocol.ProductInfo, 0, len(products))
-		for _, p := range products {
-			productInfos = append(productInfos, protocol.ProductInfo{
-				ProductID:   p.ID,
-				Name:        p.Name,
-				Price:       p.Price,
-				Description: p.Description,
-				ImageURL:    p.ImageURL,
-			})
-		}
-
-		audioData, err := m.ttsService.SynthesizeWithLang(ctx, args.IntroductionSpeech, m.getDetectedLang())
-		if err != nil {
-			slog.Error("TTS synthesis failed", "error", err)
-		}
-		audioBase64 := ""
-		if len(audioData) > 0 {
-			audioBase64 = base64.StdEncoding.EncodeToString(audioData)
-		}
-
-		m.send(protocol.TypeProductRecommendation, protocol.ProductRecommendation{
-			Transcript: args.IntroductionSpeech,
-			AudioChunk: audioBase64,
-			Products:   productInfos,
-		})
-
-		m.state.Transition(StateListening)
-		m.silenceTimer.Resume()
-
-		m.handlePostRecommendation(ctx)
+		m.handleRecommendProduct(ctx, args)
 
 	case "end_conversation":
 		var args openai.EndConversationArgs
@@ -751,11 +758,129 @@ func (m *Manager) handleFunctionCall(ctx context.Context, event openai.StreamEve
 			slog.Error("failed to parse end_conversation args", "error", err)
 			return
 		}
-		m.initiateClose("conversation_ended", "")
+		m.initiateClose("conversation_ended", args.ClosingSpeech)
 	}
 }
 
-func (m *Manager) handlePostRecommendation(ctx context.Context) {
+func (m *Manager) handleAssessInterest(ctx context.Context, args openai.AssessInterestArgs) {
+	cfg := config.Get()
+	threshold := cfg.InterestThreshold
+	if threshold <= 0 {
+		threshold = 3
+	}
+
+	slog.Info("interest_assessed",
+		"session_id", m.sessionID,
+		"interest_level", args.InterestLevel,
+		"threshold", threshold,
+		"detected_preferences", args.DetectedPreferences,
+		"trigger_utterance", args.TriggerUtterance,
+	)
+
+	if args.InterestLevel < threshold {
+		m.state.Transition(StateListening)
+		m.silenceTimer.Resume()
+		return
+	}
+
+	m.mu.Lock()
+	m.interestTriggered = true
+	m.mu.Unlock()
+
+	if args.ResponseText != "" {
+		audioData, err := m.ttsService.SynthesizeWithLang(ctx, args.ResponseText, m.getDetectedLang())
+		if err != nil {
+			slog.Warn("TTS for interest response failed", "error", err)
+		}
+		audioBase64 := ""
+		if len(audioData) > 0 {
+			audioBase64 = base64.StdEncoding.EncodeToString(audioData)
+		}
+		m.send(protocol.TypeTextDone, protocol.TextDone{
+			Text:       args.ResponseText,
+			AudioChunk: audioBase64,
+			IsFinal:    false,
+		})
+	}
+
+	catalogText := openai.BuildProductCatalogPrompt(cfg.Products)
+	m.aiClient.InjectProductCatalog(catalogText)
+	m.aiClient.SetRecommendationTools(cfg.Products)
+
+	slog.Info("stage2_triggered",
+		"session_id", m.sessionID,
+		"interest_level", args.InterestLevel,
+		"detected_preferences", args.DetectedPreferences,
+	)
+
+	requestID := generateUUID()[:8]
+	pipelineStart := time.Now()
+	m.startLLMPipeline(requestID, pipelineStart, 0, "", func(ctx context.Context) (<-chan openai.StreamEvent, error) {
+		return m.aiClient.RequestRecommendation(ctx)
+	})
+}
+
+func (m *Manager) handleRecommendProduct(ctx context.Context, args openai.RecommendProductArgs) {
+	product := catalog.GetProduct(args.ProductID)
+	if product == nil {
+		slog.Error("product not found", "product_id", args.ProductID)
+		m.state.Transition(StateListening)
+		m.silenceTimer.Resume()
+		return
+	}
+
+	productInfo := protocol.ProductInfo{
+		ProductID:   product.ID,
+		Name:        product.Name,
+		Description: product.Description,
+		ImageURL:    product.ImageURL,
+		Tags:        product.Tags,
+	}
+
+	audioData, err := m.ttsService.SynthesizeWithLang(ctx, args.IntroductionSpeech, m.getDetectedLang())
+	if err != nil {
+		slog.Error("TTS synthesis failed", "error", err)
+	}
+	audioBase64 := ""
+	if len(audioData) > 0 {
+		audioBase64 = base64.StdEncoding.EncodeToString(audioData)
+	}
+
+	m.send(protocol.TypeProductRecommendation, protocol.ProductRecommendation{
+		Transcript: args.IntroductionSpeech,
+		AudioChunk: audioBase64,
+		Reason:     args.Reason,
+		Products:   []protocol.ProductInfo{productInfo},
+	})
+
+	slog.Info("product_recommended",
+		"session_id", m.sessionID,
+		"product_id", args.ProductID,
+		"reason", args.Reason,
+		"introduction_speech", args.IntroductionSpeech,
+	)
+
+	m.state.Transition(StateListening)
+	m.silenceTimer.Resume()
+
+	m.handlePostRecommendation(ctx, args.ProductID)
+}
+
+func (m *Manager) handlePostRecommendation(ctx context.Context, recommendedProductID string) {
+	if m.config.RecommendationMode == "sequential" {
+		product := catalog.GetProduct(recommendedProductID)
+		if product != nil && len(product.RelatedProductIDs) > 0 {
+			for _, relatedID := range product.RelatedProductIDs {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				m.recommendSequentialProduct(ctx, relatedID)
+			}
+		}
+	}
+
 	if m.config.PostRecommendationBehavior == "ask_interest" {
 		followUp := "ご紹介した商品はいかがですか？気になるものはありましたか？"
 		audioData, _ := m.ttsService.SynthesizeWithLang(ctx, followUp, m.getDetectedLang())
@@ -768,11 +893,16 @@ func (m *Manager) handlePostRecommendation(ctx context.Context) {
 			AudioChunk: audioBase64,
 			IsFinal:    true,
 		})
+		m.aiClient.AppendAssistantMessage(followUp)
 	}
+}
 
-	if m.config.RecommendationMode == "sequential" && len(m.config.SequentialItems) > 0 {
-		m.seqIndex++
-	}
+func (m *Manager) recommendSequentialProduct(ctx context.Context, productID string) {
+	requestID := generateUUID()[:8]
+	pipelineStart := time.Now()
+	m.startLLMPipeline(requestID, pipelineStart, 0, "", func(ctx context.Context) (<-chan openai.StreamEvent, error) {
+		return m.aiClient.RequestSequentialRecommendation(ctx, productID)
+	})
 }
 
 func (m *Manager) handleSilenceConfirmation() {
@@ -811,7 +941,7 @@ func closingSpeech(reason string) string {
 	}
 }
 
-func (m *Manager) initiateClose(reason, _ string) {
+func (m *Manager) initiateClose(reason, llmClosingSpeech string) {
 	if err := m.state.Transition(StateClosing); err != nil {
 		return
 	}
@@ -819,7 +949,11 @@ func (m *Manager) initiateClose(reason, _ string) {
 
 	slog.Info("session closing", "session_id", m.sessionID, "reason", reason)
 
-	speech := closingSpeech(reason)
+	speech := llmClosingSpeech
+	if speech == "" {
+		speech = closingSpeech(reason)
+	}
+
 	audioData, err := m.ttsService.SynthesizeWithLang(context.Background(), speech, m.getDetectedLang())
 	if err != nil {
 		slog.Warn("closing TTS failed", "error", err)
@@ -841,7 +975,7 @@ func (m *Manager) initiateClose(reason, _ string) {
 
 	m.send(protocol.TypeSessionClose, protocol.SessionClose{
 		Reason:  reason,
-		Message: "セッションが終了しました。",
+		Message: speech,
 	})
 
 	m.state.Transition(StateClosed)

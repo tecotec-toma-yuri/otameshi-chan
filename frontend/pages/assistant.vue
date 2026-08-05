@@ -11,8 +11,10 @@ const sessionConfig: SessionConfig = {
   post_recommendation_behavior: 'return_to_conversation',
 }
 
+const router = useRouter()
 const isConnected = computed(() => session.connectionState.value === 'connected')
 const canSend = computed(() => isConnected.value && textInput.value.trim().length > 0)
+const isRestoredSession = computed(() => !!route.query.restore)
 
 function handleConnect() {
   if (isConnected.value) {
@@ -25,6 +27,20 @@ function handleConnect() {
     const restoreId = route.query.restore as string | undefined
     session.connect(sessionConfig, restoreId)
   }
+}
+
+function startNewSession() {
+  if (isConnected.value) {
+    session.disconnect()
+    if (inputMode.value === 'mic') {
+      session.stopCapture()
+    }
+  }
+  router.replace({ path: '/assistant', query: {} })
+  nextTick(() => {
+    session.resumeAudioContext()
+    session.connect(sessionConfig)
+  })
 }
 
 onMounted(() => {
@@ -63,11 +79,6 @@ function handleVolumeChange(e: Event) {
   session.setPlaybackVolume(val)
 }
 
-const connectionBadgeState = computed(() => {
-  if (session.state.value === 'completed') return 'completed'
-  return session.connectionState.value as 'connected' | 'disconnected' | 'connecting' | 'error'
-})
-
 const connectButtonLabel = computed(() => {
   switch (session.connectionState.value) {
     case 'connecting': return '接続中...'
@@ -102,7 +113,15 @@ const connectButtonClass = computed(() => {
       <div class="max-w-4xl mx-auto flex items-center justify-between">
         <div class="flex items-center gap-3">
           <h1 class="text-lg font-bold text-gray-900">おためしちゃん</h1>
-          <ConnectionBadge v-if="connectionBadgeState !== 'disconnected'" :state="connectionBadgeState" />
+          <StatusIndicator :status="session.state.value" :input-mode="inputMode" :connection-state="session.connectionState.value" />
+          <span v-if="isRestoredSession" class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded">復元</span>
+          <button
+            v-if="isRestoredSession"
+            class="px-2.5 py-1 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors"
+            @click="startNewSession"
+          >
+            新規会話
+          </button>
         </div>
         <div class="flex items-center gap-3">
           <!-- Volume control -->
@@ -159,38 +178,6 @@ const connectButtonClass = computed(() => {
       </div>
     </header>
 
-    <!-- Status indicator -->
-    <div class="bg-white border-b border-gray-100 px-4 py-2 shrink-0">
-      <div class="max-w-4xl mx-auto flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <StatusIndicator :status="session.state.value" :input-mode="inputMode" />
-          <span v-if="session.sessionId.value" class="text-xs text-gray-400">
-            セッション: {{ session.sessionId.value.substring(0, 8) }}...
-          </span>
-        </div>
-        <!-- Input mode toggle -->
-        <div class="flex items-center bg-gray-100 rounded-lg p-0.5">
-          <button
-            class="px-3 py-1 text-xs font-medium rounded-md transition-colors"
-            :class="inputMode === 'text'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'"
-            @click="switchInputMode('text')"
-          >
-            テキスト
-          </button>
-          <button
-            class="px-3 py-1 text-xs font-medium rounded-md transition-colors"
-            :class="inputMode === 'mic'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'"
-            @click="switchInputMode('mic')"
-          >
-            マイク
-          </button>
-        </div>
-      </div>
-    </div>
 
     <!-- Conversation timeline (main scrollable area) -->
     <div class="flex-1 min-h-0 overflow-hidden max-w-4xl mx-auto w-full flex flex-col">
@@ -206,39 +193,71 @@ const connectButtonClass = computed(() => {
             v-if="session.isCapturing.value"
             :volume="session.micVolume.value"
           />
-          <!-- Speaking indicator -->
           <div
             v-if="session.isSpeaking.value"
             class="text-center text-sm text-indigo-500 font-medium px-4"
           >
             音声を検出中...
           </div>
-          <div class="flex flex-col items-center gap-2">
-            <button
-              :disabled="!isConnected"
-              class="w-16 h-16 rounded-full flex items-center justify-center transition-colors"
-              :class="session.isCapturing.value
-                ? 'bg-red-500 text-white hover:bg-red-600 animate-pulse'
-                : isConnected
-                  ? 'bg-indigo-500 text-white hover:bg-indigo-600'
-                  : 'bg-gray-300 text-gray-400 cursor-not-allowed'"
-              @click="session.isCapturing.value ? session.stopCapture() : session.startCapture()"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                <line x1="12" y1="19" x2="12" y2="23"/>
-                <line x1="8" y1="23" x2="16" y2="23"/>
-              </svg>
-            </button>
-            <span class="text-xs text-gray-500">
-              {{ session.isCapturing.value ? '音声認識中 - タップで停止' : isConnected ? 'タップして音声入力開始' : '接続してください' }}
-            </span>
+          <div class="flex items-center gap-3">
+            <!-- Input mode toggle -->
+            <div class="flex items-center bg-gray-100 rounded-lg p-0.5">
+              <button
+                class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors"
+                :class="'text-gray-500 hover:text-gray-700'"
+                @click="switchInputMode('text')"
+              >
+                テキスト
+              </button>
+              <button
+                class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors bg-white text-gray-900 shadow-sm"
+              >
+                マイク
+              </button>
+            </div>
+            <!-- Mic button -->
+            <div class="flex-1 flex flex-col items-center gap-1">
+              <button
+                :disabled="!isConnected"
+                class="w-14 h-14 rounded-full flex items-center justify-center transition-colors"
+                :class="session.isCapturing.value
+                  ? 'bg-red-500 text-white hover:bg-red-600 animate-pulse'
+                  : isConnected
+                    ? 'bg-indigo-500 text-white hover:bg-indigo-600'
+                    : 'bg-gray-300 text-gray-400 cursor-not-allowed'"
+                @click="session.isCapturing.value ? session.stopCapture() : session.startCapture()"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+              </button>
+              <span class="text-xs text-gray-500">
+                {{ session.isCapturing.value ? '音声認識中' : isConnected ? '音声入力開始' : '接続してください' }}
+              </span>
+            </div>
+            <div class="w-[88px]"></div>
           </div>
         </template>
 
         <!-- Text mode -->
-        <div v-else class="flex gap-2">
+        <div v-else class="flex items-center gap-2">
+          <!-- Input mode toggle -->
+          <div class="flex items-center bg-gray-100 rounded-lg p-0.5 shrink-0">
+            <button
+              class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors bg-white text-gray-900 shadow-sm"
+            >
+              テキスト
+            </button>
+            <button
+              class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors text-gray-500 hover:text-gray-700"
+              @click="switchInputMode('mic')"
+            >
+              マイク
+            </button>
+          </div>
           <input
             v-model="textInput"
             type="text"

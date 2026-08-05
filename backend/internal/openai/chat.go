@@ -258,6 +258,20 @@ func buildSystemPrompt(cfg config.Config) string {
 	return sb.String()
 }
 
+func (c *ChatCompletionClient) doHTTPRequest(ctx context.Context, reqBody *chatRequest) (*http.Response, error) {
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	return c.client.Do(req)
+}
+
 func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []ChatMessage, ch chan<- StreamEvent, includeTools bool) {
 	started := time.Now()
 	model := config.Get().LLMModel
@@ -265,8 +279,12 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 		model = c.model
 	}
 
+	c.mu.Lock()
+	disabled := c.toolsDisabled
+	c.mu.Unlock()
+
 	var reqTools []chatTool
-	if includeTools && !c.toolsDisabled {
+	if includeTools && !disabled {
 		reqTools = c.tools
 	}
 
@@ -277,30 +295,15 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 		Stream:   true,
 	}
 
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		slog.Error("failed to marshal chat request", "error", err)
-		return
-	}
-
 	slog.Info("LLM request",
 		"url", c.baseURL+"/chat/completions",
 		"model", model,
 		"stream", true,
 		"message_count", len(messages),
 		"tool_count", len(reqTools),
-		"params", string(body),
 	)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		slog.Error("failed to create chat request", "error", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(req)
+	resp, err := c.doHTTPRequest(ctx, &reqBody)
 	if err != nil {
 		slog.Error("chat completion request failed", "error", err, "duration_ms", time.Since(started).Milliseconds())
 		return
@@ -312,27 +315,25 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		slog.Error("chat completion error", "status", resp.StatusCode, "body", string(respBody))
 		if resp.StatusCode == 400 && len(reqTools) > 0 && strings.Contains(string(respBody), "tool") {
 			slog.Warn("retrying without tools (model may not support function calling)")
+			c.mu.Lock()
 			c.toolsDisabled = true
+			c.mu.Unlock()
 			reqBody.Tools = nil
-			body2, _ := json.Marshal(reqBody)
-			req2, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body2))
-			req2.Header.Set("Content-Type", "application/json")
-			req2.Header.Set("Authorization", "Bearer "+c.apiKey)
-			resp2, err2 := c.client.Do(req2)
+			resp.Body.Close()
+			resp2, err2 := c.doHTTPRequest(ctx, &reqBody)
 			if err2 != nil {
 				slog.Error("retry without tools failed", "error", err2)
 				return
 			}
-			resp = resp2
+			resp.Body = resp2.Body
 			started = time.Now()
-			if resp.StatusCode != http.StatusOK {
-				b, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				slog.Error("retry still failed", "status", resp.StatusCode, "body", string(b))
+			if resp2.StatusCode != http.StatusOK {
+				b, _ := io.ReadAll(resp2.Body)
+				resp2.Body.Close()
+				slog.Error("retry still failed", "status", resp2.StatusCode, "body", string(b))
 				return
 			}
 		} else {

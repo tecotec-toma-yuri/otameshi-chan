@@ -75,6 +75,9 @@ func defaultConfig() Config {
 }
 
 func Load(path string) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	filePath = path
 	current = defaultConfig()
 

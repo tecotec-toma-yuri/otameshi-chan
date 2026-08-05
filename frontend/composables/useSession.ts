@@ -20,10 +20,21 @@ export function useSession() {
   const errorMessage = ref('')
   const errorType = ref<'error' | 'warning'>('error')
   const streamingText = ref('')
+  const pendingListeningTransition = ref(false)
 
   const websocket = useWebSocket()
   const audioPlayback = useAudioPlayback()
   const audioCapture = useAudioCapture(websocket.sendAudioChunk)
+
+  watch(audioPlayback.isPlaying, (playing) => {
+    if (!playing && pendingListeningTransition.value) {
+      pendingListeningTransition.value = false
+      if (state.value === 'ai_speaking') {
+        state.value = 'listening'
+        voiceInput.resumeListening()
+      }
+    }
+  })
 
   function clearLoadingUserMessages() {
     messages.value = messages.value.filter((m) => !(m.role === 'user' && m.loading))
@@ -109,8 +120,7 @@ export function useSession() {
         }
 
         if (msg.is_final) {
-          state.value = 'listening'
-          voiceInput.resumeListening()
+          pendingListeningTransition.value = true
         }
         break
 
@@ -238,6 +248,12 @@ export function useSession() {
   function disconnect() {
     websocket.sendClose('user_disconnect')
     finalizeSessionLocally()
+    pendingListeningTransition.value = false
+    messages.value.push({
+      role: 'system',
+      text: 'セッションが終了しました。',
+      timestamp: new Date(),
+    })
     state.value = 'idle'
   }
 

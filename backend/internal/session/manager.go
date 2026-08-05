@@ -114,7 +114,7 @@ func NewManager(config protocol.SessionConfig) *Manager {
 		aiClient:   newLLMClient(),
 		ttsService: newTTSService(),
 		sttService: newSTTService(),
-		guard:      guardrail.NewStubMonitor(),
+		guard:      guardrail.NewLLMMonitor(),
 		sendCh:     make(chan protocol.OutboundMessage, 64),
 		startedAt:  time.Now(),
 	}
@@ -246,6 +246,8 @@ func (m *Manager) Close() {
 	if m.cancelCurrent != nil {
 		m.cancelCurrent()
 	}
+
+	defer close(m.sendCh)
 
 	if msgs := m.aiClient.History(); len(msgs) > 0 {
 		histMsgs := make([]history.Message, 0, len(msgs))
@@ -873,12 +875,26 @@ func (m *Manager) checkGuardrail(text string) {
 }
 
 func (m *Manager) send(msgType string, payload interface{}) {
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		return
+	}
 	msg := protocol.NewOutbound(msgType, payload)
 	select {
 	case m.sendCh <- msg:
 	default:
 		slog.Warn("send channel full, dropping message", "type", msgType)
 	}
+}
+
+func (m *Manager) SendError(code, message string) {
+	m.send(protocol.TypeError, protocol.Error{
+		Code:        code,
+		Message:     message,
+		Recoverable: true,
+	})
 }
 
 func (m *Manager) sendError(code, message string, recoverable bool) {

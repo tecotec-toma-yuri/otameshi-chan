@@ -99,11 +99,9 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:         ":" + port,
-		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:        ":" + port,
+		Handler:     mux,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	quit := make(chan os.Signal, 1)
@@ -149,7 +147,11 @@ func corsHandleFunc(fn http.HandlerFunc) http.HandlerFunc {
 }
 
 func setCORS(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	origin := os.Getenv("CORS_ORIGIN")
+	if origin == "" {
+		origin = "http://localhost:3000"
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }

@@ -6,8 +6,10 @@ export function useAudioPlayback() {
   let audioContext: AudioContext | null = null
   let gainNode: GainNode | null = null
   let currentSource: AudioBufferSourceNode | null = null
+  const MAX_QUEUE_SIZE = 50
   const queue: AudioBuffer[] = []
   let playing = false
+  let pendingDecodes = 0
 
   function ensureContext() {
     if (!audioContext) {
@@ -52,17 +54,27 @@ export function useAudioPlayback() {
   async function playAudio(base64Audio: string) {
     if (!base64Audio) return
 
+    pendingDecodes++
+    isPlaying.value = true
     try {
       await resumeContext()
       const ctx = ensureContext()
       const arrayBuffer = base64ToArrayBuffer(base64Audio)
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
+      if (queue.length >= MAX_QUEUE_SIZE) {
+        queue.shift()
+      }
       queue.push(audioBuffer)
       if (!playing) {
         playNext()
       }
     } catch (e) {
       console.error('Failed to decode audio:', e)
+    } finally {
+      pendingDecodes--
+      if (pendingDecodes === 0 && !playing && queue.length === 0) {
+        isPlaying.value = false
+      }
     }
   }
 
@@ -92,10 +104,10 @@ export function useAudioPlayback() {
   }
 
   function waitUntilDone(): Promise<void> {
-    if (!playing && queue.length === 0) return Promise.resolve()
+    if (!playing && queue.length === 0 && pendingDecodes === 0) return Promise.resolve()
     return new Promise((resolve) => {
       const check = () => {
-        if (!playing && queue.length === 0) {
+        if (!playing && queue.length === 0 && pendingDecodes === 0) {
           resolve()
         } else {
           setTimeout(check, 100)
@@ -107,6 +119,7 @@ export function useAudioPlayback() {
 
   function stopAndClear() {
     queue.length = 0
+    pendingDecodes = 0
     if (currentSource) {
       try {
         currentSource.stop()

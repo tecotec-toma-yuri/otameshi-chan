@@ -116,18 +116,29 @@ func (st *SilenceTimer) startStage1() {
 }
 
 func (st *SilenceTimer) handleStage1Expired() {
-	if st.onConfirmation != nil {
-		st.onConfirmation()
-	}
-
 	st.mu.Lock()
-	defer st.mu.Unlock()
+	if st.stage != 1 || st.paused {
+		st.mu.Unlock()
+		return
+	}
 	st.stage = 2
 	st.stageStartedAt = time.Now()
 	st.timer = time.AfterFunc(silenceStage2Duration, st.handleStage2Expired)
+	st.mu.Unlock()
+
+	if st.onConfirmation != nil {
+		st.onConfirmation()
+	}
 }
 
 func (st *SilenceTimer) handleStage2Expired() {
+	st.mu.Lock()
+	if st.stage != 2 || st.paused {
+		st.mu.Unlock()
+		return
+	}
+	st.mu.Unlock()
+
 	if st.onClose != nil {
 		st.onClose()
 	}

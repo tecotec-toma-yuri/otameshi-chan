@@ -10,7 +10,7 @@ export function useVoiceInput(
   let audioContext: AudioContext | null = null
   let mediaStream: MediaStream | null = null
   let analyserNode: AnalyserNode | null = null
-  let scriptProcessor: ScriptProcessorNode | null = null
+  let workletNode: AudioWorkletNode | null = null
   let volumeAnimFrame: number | null = null
 
   let paused = false
@@ -50,16 +50,32 @@ export function useVoiceInput(
       analyserNode.fftSize = 256
       source.connect(analyserNode)
 
-      scriptProcessor = audioContext.createScriptProcessor(2048, 1, 1)
-      source.connect(scriptProcessor)
-      scriptProcessor.connect(audioContext.destination)
+      const workletBlob = new Blob([`
+        class VoiceProcessor extends AudioWorkletProcessor {
+          constructor() { super(); }
+          process(inputs) {
+            const input = inputs[0];
+            if (input.length > 0 && input[0].length > 0) {
+              this.port.postMessage(input[0]);
+            }
+            return true;
+          }
+        }
+        registerProcessor('voice-processor', VoiceProcessor);
+      `], { type: 'application/javascript' })
+      const workletUrl = URL.createObjectURL(workletBlob)
+      await audioContext.audioWorklet.addModule(workletUrl)
+      URL.revokeObjectURL(workletUrl)
 
-      scriptProcessor.onaudioprocess = (e) => {
+      workletNode = new AudioWorkletNode(audioContext, 'voice-processor')
+      source.connect(workletNode)
+      workletNode.connect(audioContext.destination)
+
+      workletNode.port.onmessage = (e) => {
         if (!isListening.value || paused) return
 
-        const inputData = e.inputBuffer.getChannelData(0)
+        const inputData = e.data as Float32Array
 
-        // Apply RNNoise denoising
         const denoised = noiseSuppression.processChunk(inputData)
         if (denoised.length === 0) return
 
@@ -120,9 +136,9 @@ export function useVoiceInput(
       cancelAnimationFrame(volumeAnimFrame)
       volumeAnimFrame = null
     }
-    if (scriptProcessor) {
-      scriptProcessor.disconnect()
-      scriptProcessor = null
+    if (workletNode) {
+      workletNode.disconnect()
+      workletNode = null
     }
     if (analyserNode) {
       analyserNode.disconnect()

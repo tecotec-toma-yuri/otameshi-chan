@@ -3,10 +3,13 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/otameshi/backend/internal/history"
 )
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func HandleHistoryList(w http.ResponseWriter, r *http.Request) {
 	sessions, err := history.List()
@@ -20,8 +23,8 @@ func HandleHistoryList(w http.ResponseWriter, r *http.Request) {
 
 func HandleHistoryGet(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/history/")
-	if id == "" {
-		http.Error(w, "missing session id", http.StatusBadRequest)
+	if id == "" || !uuidPattern.MatchString(id) {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
 		return
 	}
 	session, err := history.Get(id)

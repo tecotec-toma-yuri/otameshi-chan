@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/otameshi/backend/internal/history"
@@ -16,7 +19,12 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		allowed := os.Getenv("CORS_ORIGIN")
+		if allowed == "" {
+			allowed = "http://localhost:3000"
+		}
+		origin := r.Header.Get("Origin")
+		return origin == "" || strings.HasPrefix(origin, allowed)
 	},
 }
 
@@ -35,6 +43,12 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	slog.Info("WebSocket connection established", "remote_addr", r.RemoteAddr)
+
+	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return nil
+	})
 
 	cfg := h.parseConfigFromQuery(r)
 	mgr := session.NewManager(cfg)
@@ -56,17 +70,29 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mgr.Start()
 
 	done := make(chan struct{})
+	pingTicker := time.NewTicker(30 * time.Second)
 	go func() {
 		defer close(done)
-		for msg := range mgr.SendCh() {
-			data, err := json.Marshal(msg)
-			if err != nil {
-				slog.Error("failed to marshal outbound message", "error", err)
-				continue
-			}
-			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-				slog.Error("failed to write WebSocket message", "error", err)
-				return
+		defer pingTicker.Stop()
+		for {
+			select {
+			case msg, ok := <-mgr.SendCh():
+				if !ok {
+					return
+				}
+				data, err := json.Marshal(msg)
+				if err != nil {
+					slog.Error("failed to marshal outbound message", "error", err)
+					continue
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+					slog.Error("failed to write WebSocket message", "error", err)
+					return
+				}
+			case <-pingTicker.C:
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
 			}
 		}
 	}()
@@ -79,19 +105,15 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} else {
 				slog.Info("WebSocket connection closed", "remote_addr", r.RemoteAddr)
 			}
+			mgr.Close()
+			<-done
 			return
 		}
 
 		var msg protocol.InboundMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			slog.Warn("failed to parse incoming message", "error", err, "data", string(data))
-			errMsg := protocol.NewOutbound(protocol.TypeError, protocol.Error{
-				Code:        "parse_error",
-				Message:     "Invalid JSON message",
-				Recoverable: true,
-			})
-			errData, _ := json.Marshal(errMsg)
-			conn.WriteMessage(websocket.TextMessage, errData)
+			mgr.SendError("parse_error", "Invalid JSON message")
 			continue
 		}
 

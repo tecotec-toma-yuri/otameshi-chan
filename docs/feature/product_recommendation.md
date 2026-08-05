@@ -1218,3 +1218,218 @@ Phase 4（方針決定）:      G10
 | `frontend/components/ProductCard.vue` | G6, G7 | 商品画像表示。詳細モーダル化 |
 | `frontend/components/ProductCardList.vue` | G8 | 推薦理由の表示 |
 | `frontend/components/ProductDetailModal.vue` | G7 | **新規作成** — 商品詳細モーダル |
+
+---
+
+## 6. セッション状態遷移とオーディオパイプライン
+
+### 6.1 セッション状態（SessionState）
+
+フロントエンド（`useSession.ts`）が管理するセッション状態。UIの表示切替とマイク制御に使用する。
+
+| 状態 | 意味 | マイク（pausedフラグ） |
+|---|---|---|
+| `idle` | WebSocket 未接続 | — |
+| `listening` | マイク待受中。ユーザーの発話を検知待ち | `false`（有効） |
+| `processing` | STT → LLM 処理中。バックエンドの応答を待っている | `true`（停止） |
+| `ai_speaking` | AI発話テキストのストリーミング＋音声再生中 | `false`（有効。割り込み検知のため） |
+| `barge_in` | ユーザーが割り込みを行った直後の遷移状態 | 有効（直後に `processing` へ遷移） |
+| `completed` | セッション終了。音声再生完了後にリソース解放 | — |
+| `error` | 回復不能エラー | — |
+
+#### マイク状態の一元管理
+
+`state` の `watch` により、状態遷移に連動してマイクの pause/resume を一元管理する。
+
+```typescript
+watch(state, (newState) => {
+  if (newState === 'ai_speaking' || newState === 'listening') {
+    voiceInput.resumeListening()  // paused = false
+  }
+})
+```
+
+- `processing` → `ai_speaking` 遷移時に自動でマイク再開（割り込み検知を可能にする）
+- `ai_speaking` → `listening` 遷移時にも自動でマイク再開
+- `pauseListening()` は `handleSpeechEnd()` 内でのみ呼ばれる（発話送信時）
+
+### 6.2 状態遷移図
+
+```
+                    connect
+  [idle] ──────────────────────► [listening]
+                                   │    ▲
+                        発話検知    │    │  音声再生完了 /
+                      （pause）    │    │  user_transcript(skipped)
+                                   ▼    │
+                              [processing]
+                                   │
+                     text_delta /   │
+                     audio_stream   │
+                     （resume）     │
+                                   ▼
+                             [ai_speaking] ◄─── product_recommendation
+                                   │
+                     音声/テキスト   │
+                       割り込み     │
+                                   ▼
+                              [barge_in] ──► [processing]
+                                              （発話終了後）
+
+  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+  任意の状態 ─── session_close ──► [completed]
+  任意の状態 ─── 非回復エラー ───► [error]
+```
+
+### 6.3 正常フロー
+
+```
+1. [idle] → [listening]
+   connect() → WebSocket接続 → connection_state(ready) 受信
+
+2. [listening] → [processing]
+   ユーザー発話を検知 → 無音判定 → Opusエンコード
+   → handleSpeechEnd() で pauseListening() → 音声データ送信
+
+3. [processing] → [ai_speaking]
+   text_delta or audio_stream 受信 → state watch により resumeListening()
+   → マイク再開（割り込み検知のため）
+
+4. [ai_speaking] → [listening]
+   text_done(is_final=true) 受信 → pendingListeningTransition = true
+   → 音声再生完了（isPlaying が false に）→ state = listening
+   → state watch により resumeListening()
+```
+
+### 6.4 バージイン（割り込み）
+
+AI発話中にユーザーが割り込む機能。音声割り込みとテキスト割り込みの2種類がある。
+
+#### 音声割り込み
+
+```
+1. [ai_speaking] 中、マイクは有効（paused = false）
+2. ユーザーの音声を検知 → onSpeechStart() コールバック
+3. handleSpeechStart():
+   - audioPlayback.stopAndClear()  // 再生キュー全クリア＋即座に停止
+   - state = 'barge_in'
+4. バックエンド側:
+   - 新しい音声受信 → interruptIfBusy()
+   - LLM/TTS パイプラインを cancel
+   - clear_audio_buffer メッセージを送信
+5. ユーザー発話終了 → Opusエンコード → handleSpeechEnd()
+   - pauseListening()
+   - state = 'processing'
+   - 音声データ送信
+```
+
+#### テキスト割り込み
+
+```
+1. sendText() 内で ai_speaking / processing / 音声再生中を検知
+2. audioPlayback.stopAndClear()
+3. state = 'barge_in'
+4. テキスト送信 → state = 'processing'
+```
+
+#### バックエンドの割り込み処理（interruptIfBusy）
+
+**ファイル:** `backend/internal/session/manager.go`
+
+```go
+func (m *Manager) interruptIfBusy() {
+    currentState := m.state.Current()
+    if currentState != StateAISpeaking && currentState != StateProcessing {
+        return
+    }
+    // LLM/TTSパイプラインのキャンセル
+    if m.cancelCurrent != nil {
+        m.cancelCurrent()
+    }
+    // フロントエンドに音声バッファクリアを指示
+    m.send(TypeClearAudioBuffer, ClearAudioBuffer{Reason: "barge_in"})
+    m.state.Transition(StateListening)
+}
+```
+
+- `handleAudioSpeech()` と `handleAudioChunk()` の冒頭で呼ばれる
+- `Processing` または `AISpeaking` 状態の場合のみ発動
+- `context.Cancel()` により進行中のLLMストリーミングとTTS合成を即座に中断
+
+### 6.5 音声入力パイプライン
+
+**ファイル:** `frontend/composables/useVoiceInput.ts`
+
+```
+マイク（48kHz）
+  → AudioWorklet（128サンプル/フレーム ≈ 2.67ms）
+  → RNNoise（ノイズ抑制）
+  → RMS音量判定
+  → 発話区間検出
+  → Opus/WebMエンコード（非同期）
+  → Base64 → onSpeechEnd コールバック
+```
+
+#### VAD（音声区間検出）パラメータ
+
+| パラメータ | 値 | 説明 |
+|---|---|---|
+| `SILENCE_THRESHOLD` | 0.015 | RMS閾値。これを超えると発話と判定 |
+| `SILENCE_FRAMES_REQUIRED` | 30 | 発話終了と判定する連続無音フレーム数（約80ms） |
+| `MIN_SPEECH_FRAMES` | 5 | 最低発話フレーム数（約13ms）。これ未満は破棄 |
+
+- 音量ベースの簡易VAD。文単位や意味的な区切りではない
+- `echoCancellation: true` と RNNoise の組み合わせでAI再生音のフィードバックを抑制
+
+#### 音声エンコード
+
+- RNNoise処理済みのPCMデータを `OfflineAudioContext` → `MediaRecorder`（`audio/webm;codecs=opus`、32kbps）でエンコード
+- エンコードは非同期（fire-and-forget）。エンコード完了後に `onSpeechEnd` コールバックが呼ばれる
+
+### 6.6 音声再生パイプライン
+
+**ファイル:** `frontend/composables/useAudioPlayback.ts`
+
+```
+audio_stream / text_done.audio_chunk（Base64）
+  → decodeAudioData → AudioBuffer キュー（最大50）
+  → 順次再生（source.onended → playNext）
+```
+
+| 機能 | メソッド | 説明 |
+|---|---|---|
+| 再生 | `playAudio(base64)` | デコードしてキューに追加、未再生なら再生開始 |
+| 割り込み停止 | `stopAndClear()` | キュー全クリア＋現在の再生を即停止 |
+| 完了待ち | `waitUntilDone()` | キュー＋再生＋デコード待ちがすべて完了するまで待機 |
+| 音量制御 | `setVolume(val)` / `toggleMute()` | `GainNode` で音量調整 |
+
+### 6.7 TTS区切り単位
+
+**ファイル:** `backend/internal/textbuf/buffer.go`
+
+LLMのストリーミング出力を句読点で区切り、文単位でTTSに投入する。
+
+| ルール | 条件 | 動作 |
+|---|---|---|
+| 句読点区切り | `。` `、` `！` `？` `…` を検出 | その位置で分割してTTSに送信 |
+| 文字数上限 | 100文字を超過 | 句読点がなくても強制分割 |
+| タイムアウト | 1秒間新しいトークンが来ない | バッファ内の残りを強制送信 |
+| LLM完了 | `text_done` イベント | `Flush()` で残りを送信 |
+
+句読点で細かく区切ることで、音声再生開始までのレイテンシを最小化する。
+
+### 6.8 STTエンジン
+
+設定画面でエンジンを切り替え可能。
+
+| エンジン | 設定値 | 説明 |
+|---|---|---|
+| faster-whisper | `whisper` | ローカルのfaster-whisperサーバー（CTranslate2ベース）。Opus/WebM対応 |
+| Groq | `groq` | Groq APIを使用。モデル選択可能（whisper-large-v3-turbo等） |
+
+#### 音声フォーマット
+
+- フロントエンド → バックエンド: Opus/WebM（Base64）
+- バックエンド → STT: Opus/WebMバイナリをそのまま送信（WAV変換不要）
+- faster-whisper: 内部でffmpegにより自動変換
+- Groq API: Opus/WebMネイティブ対応

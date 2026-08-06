@@ -685,14 +685,10 @@ func (m *Manager) startLLMPipeline(
 
 				llmMs := time.Since(llmStart).Milliseconds()
 
-				// When LLM returns text + tool_calls together (e.g. assess_interest),
-				// event.Text contains the cleaned conversation text. Flush it as a
-				// proper text_done so the frontend bubble finalizes correctly.
 				if event.Text != "" {
 					buf.Flush()
 					close(ttsQueue)
 					<-ttsDone
-
 					m.send(protocol.TypeTextDone, protocol.TextDone{
 						Text:    event.Text,
 						IsFinal: true,
@@ -701,6 +697,8 @@ func (m *Manager) startLLMPipeline(
 					buf.Reset()
 					close(ttsQueue)
 					<-ttsDone
+					// No text content — reset frontend state so it doesn't stay in processing/ai_speaking
+					m.send(protocol.TypeClearAudioBuffer, protocol.ClearAudioBuffer{Reason: "function_call"})
 				}
 
 				ttsStart := time.Now()

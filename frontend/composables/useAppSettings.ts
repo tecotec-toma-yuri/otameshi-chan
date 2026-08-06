@@ -1,13 +1,16 @@
 export interface ProductConfig {
   id: string
   name: string
-  price: number
   description: string
   image_url: string
+  tags: string[]
+  related_product_ids: string[]
 }
 
 export interface AppConfig {
   system_prompt: string
+  interest_prompt: string
+  interest_threshold: number
   llm_model: string
   tts_engine: string
   tts_voice: string
@@ -65,6 +68,8 @@ export function useAppSettings() {
 
   const config = ref<AppConfig>({
     system_prompt: '',
+    interest_prompt: '',
+    interest_threshold: 3,
     llm_model: '',
     tts_engine: 'piper',
     tts_voice: 'tsukuyomi_mb',

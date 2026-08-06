@@ -44,6 +44,7 @@ export interface ProductRecommendationMessage {
   type: 'product_recommendation'
   transcript: string
   audio_chunk: string
+  reason?: string
   products: ProductInfo[]
 }
 
@@ -98,17 +99,15 @@ export interface HistoryRestoreMessage {
 // Shared types
 export interface SessionConfig {
   recommendation_mode: 'ai_driven' | 'sequential'
-  sequential_items?: { product_ids: string[] }[]
-  sequential_interval_sec?: number
   post_recommendation_behavior: 'return_to_conversation' | 'ask_interest'
 }
 
 export interface ProductInfo {
   product_id: string
   name: string
-  price: number
   description: string
   image_url: string
+  tags?: string[]
 }
 
 // Union type for all server messages

@@ -11,11 +11,12 @@ import (
 )
 
 type Product struct {
-	ID          string `json:"id" yaml:"id"`
-	Name        string `json:"name" yaml:"name"`
-	Price       int    `json:"price" yaml:"price"`
-	Description string `json:"description" yaml:"description"`
-	ImageURL    string `json:"image_url" yaml:"image_url"`
+	ID                string   `json:"id" yaml:"id"`
+	Name              string   `json:"name" yaml:"name"`
+	Description       string   `json:"description" yaml:"description"`
+	ImageURL          string   `json:"image_url" yaml:"image_url"`
+	Tags              []string `json:"tags" yaml:"tags"`
+	RelatedProductIDs []string `json:"related_product_ids" yaml:"related_product_ids"`
 }
 
 type Config struct {
@@ -33,8 +34,10 @@ type Config struct {
 	STTEngine         string    `json:"stt_engine" yaml:"stt_engine"`
 	STTModel          string    `json:"stt_model" yaml:"stt_model"`
 	STTLanguage       string    `json:"stt_language" yaml:"stt_language"`
-	STTPrompt         string    `json:"stt_prompt" yaml:"stt_prompt"`
-	Products          []Product `json:"products" yaml:"products"`
+	STTPrompt          string    `json:"stt_prompt" yaml:"stt_prompt"`
+	Products           []Product `json:"products" yaml:"products"`
+	InterestPrompt     string    `json:"interest_prompt" yaml:"interest_prompt"`
+	InterestThreshold  int       `json:"interest_threshold" yaml:"interest_threshold"`
 }
 
 var (
@@ -71,10 +74,16 @@ func defaultConfig() Config {
 		STTLanguage:       envOrDefault("STT_LANGUAGE", "ja"),
 		STTPrompt:         envOrDefault("STT_PROMPT", ""),
 		Products: []Product{
-			{ID: "h001", Name: "ハイチュウ ＜グレープ＞", Price: 140, Description: "ジューシーな果汁感あふれる定番フレーバー", ImageURL: "/images/h001.png"},
-			{ID: "h002", Name: "ハイチュウ ＜ストロベリー＞", Price: 140, Description: "いちごの華やかな香りと甘酸っぱさ", ImageURL: "/images/h002.png"},
-			{ID: "h003", Name: "ハイチュウ ＜グリーンアップル＞", Price: 140, Description: "爽やかな香りとスッキリとした酸味", ImageURL: "/images/h003.png"},
+			{ID: "h001", Name: "ハイチュウ ＜グレープ＞", Description: "ジューシーな果汁感あふれる定番フレーバー", ImageURL: "/images/h001.png", Tags: []string{"甘い", "フルーティー", "定番"}},
+			{ID: "h002", Name: "ハイチュウ ＜ストロベリー＞", Description: "いちごの華やかな香りと甘酸っぱさ", ImageURL: "/images/h002.png", Tags: []string{"甘酸っぱい", "フルーティー", "定番"}},
+			{ID: "h003", Name: "ハイチュウ ＜グリーンアップル＞", Description: "爽やかな香りとスッキリとした酸味", ImageURL: "/images/h003.png", Tags: []string{"酸味", "爽やか", "フルーティー"}},
 		},
+		InterestPrompt: `以下のような話題が出た場合に、お客様が商品に興味を持っていると判定してください。
+- 商品に関連する話題への言及
+- 味や好みへの言及
+- 「おすすめは？」「何がある？」等の直接的な質問
+- 購入意欲の表現`,
+		InterestThreshold: envIntOrDefault("INTEREST_THRESHOLD", 3),
 	}
 }
 

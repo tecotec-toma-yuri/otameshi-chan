@@ -7,6 +7,7 @@ export interface ConversationMessage {
   text: string
   timestamp: Date
   products?: ProductInfo[]
+  reason?: string
   streaming?: boolean
   loading?: boolean
   latency?: LatencyInfo
@@ -125,7 +126,11 @@ export function useSession() {
         }
 
         if (msg.is_final) {
-          pendingListeningTransition.value = true
+          if (!audioPlayback.isPlaying.value) {
+            state.value = 'listening'
+          } else {
+            pendingListeningTransition.value = true
+          }
         }
         break
 
@@ -137,12 +142,14 @@ export function useSession() {
             recStreamMsg.text = msg.transcript || '商品をおすすめします。'
             recStreamMsg.streaming = false
             recStreamMsg.products = msg.products
+            recStreamMsg.reason = msg.reason
           } else {
             messages.value.push({
               role: 'ai',
               text: msg.transcript || '商品をおすすめします。',
               timestamp: new Date(),
               products: msg.products,
+              reason: msg.reason,
             })
           }
         }
@@ -150,8 +157,11 @@ export function useSession() {
 
         if (msg.audio_chunk) {
           audioPlayback.playAudio(msg.audio_chunk)
+          state.value = 'ai_speaking'
+          pendingListeningTransition.value = true
+        } else {
+          state.value = 'listening'
         }
-        state.value = 'ai_speaking'
         break
 
       case 'history_restore':

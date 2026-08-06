@@ -61,14 +61,8 @@ type SessionControl struct {
 }
 
 type SessionConfig struct {
-	RecommendationMode         string           `json:"recommendation_mode"`
-	SequentialItems            []SequentialItem  `json:"sequential_items,omitempty"`
-	SequentialIntervalSec      int              `json:"sequential_interval_sec,omitempty"`
-	PostRecommendationBehavior string           `json:"post_recommendation_behavior"`
-}
-
-type SequentialItem struct {
-	ProductIDs []string `json:"product_ids"`
+	RecommendationMode         string `json:"recommendation_mode"`
+	PostRecommendationBehavior string `json:"post_recommendation_behavior"`
 }
 
 // --- Server → Client ---
@@ -95,15 +89,16 @@ type TextDone struct {
 type ProductRecommendation struct {
 	Transcript string        `json:"transcript"`
 	AudioChunk string        `json:"audio_chunk,omitempty"`
+	Reason     string        `json:"reason,omitempty"`
 	Products   []ProductInfo `json:"products"`
 }
 
 type ProductInfo struct {
-	ProductID   string `json:"product_id"`
-	Name        string `json:"name"`
-	Price       int    `json:"price"`
-	Description string `json:"description"`
-	ImageURL    string `json:"image_url"`
+	ProductID   string   `json:"product_id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	ImageURL    string   `json:"image_url"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 type ClearAudioBuffer struct {

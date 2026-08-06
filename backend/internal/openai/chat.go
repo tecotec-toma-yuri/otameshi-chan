@@ -36,11 +36,12 @@ type ChatFunctionCall struct {
 }
 
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []ChatMessage `json:"messages"`
-	Tools       []chatTool    `json:"tools,omitempty"`
-	Stream      bool          `json:"stream"`
-	Temperature float64       `json:"temperature,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []ChatMessage   `json:"messages"`
+	Tools       []chatTool      `json:"tools,omitempty"`
+	ToolChoice  json.RawMessage `json:"tool_choice,omitempty"`
+	Stream      bool            `json:"stream"`
+	Temperature float64         `json:"temperature,omitempty"`
 }
 
 type chatTool struct {
@@ -103,14 +104,14 @@ func NewChatCompletionClient() *ChatCompletionClient {
 		baseURL = "https://api.openai.com/v1"
 	}
 
-	systemPrompt := buildSystemPrompt(cfg)
+	systemPrompt := buildStage1SystemPrompt(cfg)
 
 	c := &ChatCompletionClient{
 		apiKey:  apiKey,
 		model:   model,
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: 120 * time.Second},
-		tools:   buildTools(cfg.Products),
+		tools:   buildStage1Tools(cfg),
 		history: []ChatMessage{
 			{Role: "system", Content: systemPrompt},
 		},
@@ -140,20 +141,74 @@ func (c *ChatCompletionClient) SendUserMessage(ctx context.Context, text string)
 func (c *ChatCompletionClient) RequestGreeting(ctx context.Context) (<-chan StreamEvent, error) {
 	const instruction = "お客様が接続しました。おためしちゃんとして、1〜2文で明るく短く挨拶してください。商品の推薦や関数呼び出しはしないでください。"
 
+	cfg := config.Get()
 	c.mu.Lock()
-	messages := make([]ChatMessage, len(c.history), len(c.history)+1)
-	copy(messages, c.history)
-	messages = append(messages, ChatMessage{Role: "user", Content: instruction})
+	// Use base system prompt without interest guidelines for greeting
+	greetingMessages := []ChatMessage{
+		{Role: "system", Content: cfg.SystemPrompt},
+		{Role: "user", Content: instruction},
+	}
 	c.mu.Unlock()
 
 	ch := make(chan StreamEvent, 64)
 
 	go func() {
 		defer close(ch)
-		c.doStreamRequest(ctx, messages, ch, false)
+		c.doStreamRequest(ctx, greetingMessages, ch, false)
 	}()
 
 	return ch, nil
+}
+
+func (c *ChatCompletionClient) RequestRecommendation(ctx context.Context) (<-chan StreamEvent, error) {
+	c.mu.Lock()
+	messages := make([]ChatMessage, len(c.history))
+	copy(messages, c.history)
+	c.mu.Unlock()
+
+	ch := make(chan StreamEvent, 64)
+	go func() {
+		defer close(ch)
+		c.doStreamRequestForced(ctx, messages, ch, "recommend_product")
+	}()
+	return ch, nil
+}
+
+func (c *ChatCompletionClient) RequestSequentialRecommendation(ctx context.Context, productID string) (<-chan StreamEvent, error) {
+	c.mu.Lock()
+	c.tools = buildSequentialRecommendTool(productID)
+	messages := make([]ChatMessage, len(c.history))
+	copy(messages, c.history)
+	c.mu.Unlock()
+
+	ch := make(chan StreamEvent, 64)
+	go func() {
+		defer close(ch)
+		c.doStreamRequestForced(ctx, messages, ch, "recommend_product")
+	}()
+	return ch, nil
+}
+
+func (c *ChatCompletionClient) UpdateSystemPrompt(prompt string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.history) > 0 && c.history[0].Role == "system" {
+		c.history[0].Content = prompt
+	}
+}
+
+func (c *ChatCompletionClient) InjectProductCatalog(catalogText string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.history) > 0 && c.history[0].Role == "system" {
+		c.history[0].Content += "\n\n" + catalogText
+	}
+}
+
+func (c *ChatCompletionClient) SetRecommendationTools(products []config.Product) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tools = buildRecommendTools(products)
 }
 
 func (c *ChatCompletionClient) AppendAssistantMessage(text string) {
@@ -183,7 +238,11 @@ func (c *ChatCompletionClient) Close() error {
 	return nil
 }
 
-func buildTools(products []config.Product) []chatTool {
+// ---------------------------------------------------------------------------
+// Stage 1 tools: assess_interest + end_conversation
+// ---------------------------------------------------------------------------
+
+func buildStage1Tools(cfg config.Config) []chatTool {
 	result := []chatTool{
 		{
 			Type: "function",
@@ -204,34 +263,38 @@ func buildTools(products []config.Product) []chatTool {
 		},
 	}
 
-	if len(products) > 0 {
-		productIDs := make([]string, 0, len(products))
-		for _, p := range products {
-			productIDs = append(productIDs, fmt.Sprintf("%q", p.ID))
-		}
-		enumJSON := "[" + strings.Join(productIDs, ",") + "]"
-
+	if len(cfg.Products) > 0 {
 		result = append([]chatTool{
 			{
 				Type: "function",
 				Function: chatToolFunction{
-					Name:        "recommend_product",
-					Description: "お客様が商品について具体的に聞いた時や、おすすめを求めた時にのみ呼び出す。雑談や挨拶では呼び出さないこと。",
-					Parameters: json.RawMessage(fmt.Sprintf(`{
+					Name:        "assess_interest",
+					Description: "会話の応答と同時に、お客様の商品への興味度を判定する。毎回の会話で呼び出し、興味の度合いを1〜5で返す。応答テキストとは別に、この関数も同時に呼ぶこと。",
+					Parameters: json.RawMessage(`{
 						"type": "object",
 						"properties": {
-							"product_ids": {
-								"type": "array",
-								"items": {"type": "string", "enum": %s},
-								"description": "おすすめする商品IDの配列"
+							"interest_level": {
+								"type": "integer",
+								"minimum": 1,
+								"maximum": 5,
+								"description": "興味の度合い（1=興味なし 2=わずかに関連 3=やや興味あり 4=明確な興味 5=強い購買意欲）"
 							},
-							"introduction_speech": {
+							"detected_preferences": {
+								"type": "array",
+								"items": {"type": "string"},
+								"description": "会話から検出したユーザーの好み（例: [\"甘い\", \"フルーティー\"]）。興味が低い場合は空配列"
+							},
+							"response_text": {
 								"type": "string",
-								"description": "商品を紹介するときの発話テキスト"
+								"description": "興味度が高い場合にユーザーに返す反応（例: 「甘いものがお好きなんですね！」）。興味が低い場合は空文字"
+							},
+							"trigger_utterance": {
+								"type": "string",
+								"description": "判定の根拠となったユーザーの発言の要約"
 							}
 						},
-						"required": ["product_ids", "introduction_speech"]
-					}`, enumJSON)),
+						"required": ["interest_level", "detected_preferences", "response_text", "trigger_utterance"]
+					}`),
 				},
 			},
 		}, result...)
@@ -240,7 +303,87 @@ func buildTools(products []config.Product) []chatTool {
 	return result
 }
 
-func buildSystemPrompt(cfg config.Config) string {
+// ---------------------------------------------------------------------------
+// Stage 2 tools: recommend_product (full catalog)
+// ---------------------------------------------------------------------------
+
+func buildRecommendTools(products []config.Product) []chatTool {
+	productIDs := make([]string, 0, len(products))
+	for _, p := range products {
+		productIDs = append(productIDs, fmt.Sprintf("%q", p.ID))
+	}
+	enumJSON := "[" + strings.Join(productIDs, ",") + "]"
+
+	return []chatTool{
+		{
+			Type: "function",
+			Function: chatToolFunction{
+				Name:        "recommend_product",
+				Description: "お客様の好みに最も合う商品を1つ選び紹介する。",
+				Parameters: json.RawMessage(fmt.Sprintf(`{
+					"type": "object",
+					"properties": {
+						"product_id": {
+							"type": "string",
+							"enum": %s,
+							"description": "おすすめする商品ID"
+						},
+						"introduction_speech": {
+							"type": "string",
+							"description": "商品を紹介するときの発話テキスト"
+						},
+						"reason": {
+							"type": "string",
+							"description": "この商品を薦める理由"
+						}
+					},
+					"required": ["product_id", "introduction_speech", "reason"]
+				}`, enumJSON)),
+			},
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sequential recommend tool: single product for related-product flow
+// ---------------------------------------------------------------------------
+
+func buildSequentialRecommendTool(productID string) []chatTool {
+	return []chatTool{
+		{
+			Type: "function",
+			Function: chatToolFunction{
+				Name:        "recommend_product",
+				Description: "関連商品をお客様に紹介する。先に紹介した商品との関連性に触れながら自然につなげること。",
+				Parameters: json.RawMessage(fmt.Sprintf(`{
+					"type": "object",
+					"properties": {
+						"product_id": {
+							"type": "string",
+							"enum": [%q],
+							"description": "おすすめする商品ID"
+						},
+						"introduction_speech": {
+							"type": "string",
+							"description": "商品を紹介するときの発話テキスト"
+						},
+						"reason": {
+							"type": "string",
+							"description": "この商品を薦める理由"
+						}
+					},
+					"required": ["product_id", "introduction_speech", "reason"]
+				}`, productID)),
+			},
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// System prompts
+// ---------------------------------------------------------------------------
+
+func buildStage1SystemPrompt(cfg config.Config) string {
 	prompt := cfg.SystemPrompt
 	if len(cfg.Products) == 0 {
 		return prompt
@@ -248,15 +391,50 @@ func buildSystemPrompt(cfg config.Config) string {
 
 	var sb strings.Builder
 	sb.WriteString(prompt)
-	sb.WriteString("\n\n## 取扱商品一覧\n")
-	for _, p := range cfg.Products {
-		sb.WriteString(fmt.Sprintf("- %s: %s（%d円）— %s\n", p.ID, p.Name, p.Price, p.Description))
-	}
-	sb.WriteString("\n## 関数の使い方\n")
-	sb.WriteString("- recommend_product: お客様が商品について具体的に質問したり、「おすすめを教えて」「何がある？」など明確に商品紹介を求めた場合にのみ使う。雑談や挨拶では絶対に使わないこと。\n")
+	sb.WriteString("\n\n## 興味判定ガイドライン\n\n")
+	sb.WriteString("あなたは通常の会話応答と同時に、お客様の商品への興味度を判定します。\n")
+	sb.WriteString("毎回の応答で assess_interest 関数を呼び出し、興味度を1〜5で判定してください。\n\n")
+	sb.WriteString("### 判定基準\n\n")
+	sb.WriteString(cfg.InterestPrompt)
+	sb.WriteString("\n\n### 興味度の5段階\n")
+	sb.WriteString("- 1: 興味なし（上記の判定基準に該当しない）\n")
+	sb.WriteString("- 2: わずかに関連（判定基準にかすかに触れる程度）\n")
+	sb.WriteString("- 3: やや興味あり（判定基準に該当する話題が出ている）\n")
+	sb.WriteString("- 4: 明確な興味（直接的に商品やおすすめを求めている）\n")
+	sb.WriteString("- 5: 強い購買意欲（買いたい・試したい等の意欲を示している）\n\n")
+	sb.WriteString("### response_text の書き方\n")
+	sb.WriteString("- 興味度3以上の場合: お客様の興味に反応する一言を返す\n")
+	sb.WriteString("  （「甘いものがお好きなんですね！」「お菓子に興味がおありですか？」等）\n")
+	sb.WriteString("- 興味度1〜2の場合: 空文字を返す\n\n")
+	sb.WriteString("## 関数の使い方\n")
+	sb.WriteString("- assess_interest: 毎回の応答で呼び出す。通常の会話応答テキストとは別に、この関数も同時に呼ぶこと。\n")
 	sb.WriteString("- end_conversation: お客様が「さようなら」「ありがとう、もう大丈夫」など会話を終えたい意思を明確に示した時に使う。\n")
 	return sb.String()
 }
+
+// BuildProductCatalogPrompt returns the text to inject into the system prompt
+// when transitioning to stage 2 (recommendation).
+func BuildProductCatalogPrompt(products []config.Product) string {
+	var sb strings.Builder
+	sb.WriteString("## 取扱商品一覧\n")
+	for _, p := range products {
+		if len(p.Tags) > 0 {
+			sb.WriteString(fmt.Sprintf("- %s: %s [%s]\n  %s\n", p.ID, p.Name, strings.Join(p.Tags, ","), p.Description))
+		} else {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n  %s\n", p.ID, p.Name, p.Description))
+		}
+	}
+	sb.WriteString("\n## 商品推薦ガイドライン\n")
+	sb.WriteString("お客様の好みに最も合う商品を1つ選び、recommend_product 関数で紹介してください。\n")
+	sb.WriteString("- 必ず1商品を選ぶこと\n")
+	sb.WriteString("- なぜその商品を薦めるのか理由を添える（「甘いのがお好きとのことでしたので」等）\n")
+	sb.WriteString("- introduction_speech は2文以内で簡潔に\n")
+	return sb.String()
+}
+
+// ---------------------------------------------------------------------------
+// HTTP + SSE streaming
+// ---------------------------------------------------------------------------
 
 func (c *ChatCompletionClient) doHTTPRequest(ctx context.Context, reqBody *chatRequest) (*http.Response, error) {
 	body, err := json.Marshal(reqBody)
@@ -310,7 +488,50 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 		"params", string(body),
 	)
 
-	resp, err := c.doHTTPRequest(ctx, &reqBody)
+	c.streamAndParse(ctx, &reqBody, ch, started, reqTools)
+}
+
+func (c *ChatCompletionClient) doStreamRequestForced(ctx context.Context, messages []ChatMessage, ch chan<- StreamEvent, forceFn string) {
+	started := time.Now()
+	model := config.Get().LLMModel
+	if model == "" {
+		model = c.model
+	}
+
+	c.mu.Lock()
+	tools := make([]chatTool, len(c.tools))
+	copy(tools, c.tools)
+	c.mu.Unlock()
+
+	toolChoice, _ := json.Marshal(map[string]interface{}{
+		"type": "function",
+		"function": map[string]string{
+			"name": forceFn,
+		},
+	})
+
+	reqBody := chatRequest{
+		Model:      model,
+		Messages:   messages,
+		Tools:      tools,
+		ToolChoice: toolChoice,
+		Stream:     true,
+	}
+
+	slog.Info("LLM request (forced)",
+		"url", c.baseURL+"/chat/completions",
+		"model", model,
+		"stream", true,
+		"message_count", len(messages),
+		"tool_count", len(tools),
+		"forced_function", forceFn,
+	)
+
+	c.streamAndParse(ctx, &reqBody, ch, started, tools)
+}
+
+func (c *ChatCompletionClient) streamAndParse(ctx context.Context, reqBody *chatRequest, ch chan<- StreamEvent, started time.Time, reqTools []chatTool) {
+	resp, err := c.doHTTPRequest(ctx, reqBody)
 	if err != nil {
 		slog.Error("chat completion request failed", "error", err, "duration_ms", time.Since(started).Milliseconds())
 		return
@@ -329,8 +550,9 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 			c.toolsDisabled = true
 			c.mu.Unlock()
 			reqBody.Tools = nil
+			reqBody.ToolChoice = nil
 			resp.Body.Close()
-			resp2, err2 := c.doHTTPRequest(ctx, &reqBody)
+			resp2, err2 := c.doHTTPRequest(ctx, reqBody)
 			if err2 != nil {
 				slog.Error("retry without tools failed", "error", err2)
 				return
@@ -441,7 +663,6 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 			switch *choice.FinishReason {
 			case "stop":
 				if fullText != "" {
-					// 過去会話は assistant ロールの content として保持する
 					c.mu.Lock()
 					c.history = append(c.history, ChatMessage{Role: "assistant", Content: fullText})
 					c.mu.Unlock()
@@ -455,26 +676,54 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 				}
 
 			case "tool_calls":
+				// Some models dump function call markup into content — strip it.
+				// Pass cleaned text along with the first function_call event
+				// so the session manager can finalize the text bubble.
+				cleanedText := stripFunctionCallMarkup(fullText)
+				historyAdded := false
+				if cleanedText != "" && !textDoneSent {
+					c.mu.Lock()
+					c.history = append(c.history, ChatMessage{Role: "assistant", Content: cleanedText})
+					c.mu.Unlock()
+					historyAdded = true
+				}
+
+				first := true
 				for _, tc := range toolCalls {
 					argsJSON := json.RawMessage(tc.args.String())
 					speech := extractToolSpeech(tc.name, tc.args.String())
 
-					// tool_calls / tool ロールではなく、発話内容を assistant として履歴に残す
 					if speech != "" {
 						c.mu.Lock()
 						c.history = append(c.history, ChatMessage{Role: "assistant", Content: speech})
 						c.mu.Unlock()
+						historyAdded = true
+					}
+
+					ev := StreamEvent{
+						Type:         "function_call",
+						FunctionName: tc.name,
+						FunctionArgs: argsJSON,
+					}
+					if first && cleanedText != "" && !textDoneSent {
+						ev.Text = cleanedText
+						first = false
 					}
 
 					select {
 					case <-ctx.Done():
 						return
-					case ch <- StreamEvent{
-						Type:         "function_call",
-						FunctionName: tc.name,
-						FunctionArgs: argsJSON,
-					}:
+					case ch <- ev:
 					}
+				}
+
+				// Ensure an assistant turn exists in history to prevent consecutive user messages.
+				// This happens when the model emits a tool call with no text content and no speech
+				// (e.g. assess_interest with response_text="" for low-interest turns).
+				if !historyAdded && !textDoneSent {
+					c.mu.Lock()
+					c.history = append(c.history, ChatMessage{Role: "assistant", Content: "（処理中）"})
+					c.mu.Unlock()
 				}
 			}
 		}
@@ -494,6 +743,29 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 	slog.Info("latency", "stage", "llm_total", "duration_ms", time.Since(started).Milliseconds())
 }
 
+// stripFunctionCallMarkup removes function-call metadata that some models
+// erroneously include in the text content alongside proper tool_calls.
+// Common patterns: "**Response:**\n...\n**Function call:**\n{...}"
+func stripFunctionCallMarkup(text string) string {
+	markers := []string{
+		"**Function call:**",
+		"**Function Call:**",
+		"**function_call:**",
+		"\n```json\n{",
+	}
+	cleaned := text
+	for _, marker := range markers {
+		if idx := strings.Index(cleaned, marker); idx >= 0 {
+			cleaned = cleaned[:idx]
+		}
+	}
+	// Also strip "**Response:**" header prefix
+	cleaned = strings.TrimPrefix(cleaned, "**Response:**")
+	cleaned = strings.TrimPrefix(cleaned, "**Response:** ")
+	cleaned = strings.TrimSpace(cleaned)
+	return cleaned
+}
+
 func extractToolSpeech(name, argsJSON string) string {
 	switch name {
 	case "end_conversation":
@@ -505,6 +777,11 @@ func extractToolSpeech(name, argsJSON string) string {
 		var args RecommendProductArgs
 		if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
 			return args.IntroductionSpeech
+		}
+	case "assess_interest":
+		var args AssessInterestArgs
+		if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
+			return args.ResponseText
 		}
 	}
 	return ""

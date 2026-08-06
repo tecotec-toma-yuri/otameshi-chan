@@ -6,12 +6,23 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/otameshi/backend/internal/config"
 )
+
+// AssessInterestArgs is the function call payload for assess_interest.
+type AssessInterestArgs struct {
+	InterestLevel       int      `json:"interest_level"`
+	DetectedPreferences []string `json:"detected_preferences"`
+	ResponseText        string   `json:"response_text"`
+	TriggerUtterance    string   `json:"trigger_utterance"`
+}
 
 // RecommendProductArgs is the function call payload for recommend_product.
 type RecommendProductArgs struct {
-	ProductIDs         []string `json:"product_ids"`
-	IntroductionSpeech string   `json:"introduction_speech"`
+	ProductID          string `json:"product_id"`
+	IntroductionSpeech string `json:"introduction_speech"`
+	Reason             string `json:"reason"`
 }
 
 // EndConversationArgs is the function call payload for end_conversation.
@@ -100,6 +111,70 @@ func (s *StubClient) AppendAssistantMessage(text string) {}
 
 func (s *StubClient) RestoreHistory(_ []ChatMessage) {}
 func (s *StubClient) History() []ChatMessage { return nil }
+
+func (s *StubClient) UpdateSystemPrompt(prompt string) {}
+
+func (s *StubClient) InjectProductCatalog(catalogText string) {}
+
+func (s *StubClient) SetRecommendationTools(products []config.Product) {}
+
+func (s *StubClient) RequestRecommendation(ctx context.Context) (<-chan StreamEvent, error) {
+	ch := make(chan StreamEvent, 32)
+	slog.Info("LLM request (stub)", "mode", "stub", "kind", "recommendation")
+	go func() {
+		defer close(ch)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(300 * time.Millisecond):
+		}
+		args := RecommendProductArgs{
+			ProductID:          "h001",
+			IntroductionSpeech: "こちらの商品をおすすめします！",
+			Reason:             "人気のフレーバーです",
+		}
+		raw, _ := json.Marshal(args)
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- StreamEvent{
+			Type:         "function_call",
+			FunctionName: "recommend_product",
+			FunctionArgs: raw,
+		}:
+		}
+	}()
+	return ch, nil
+}
+
+func (s *StubClient) RequestSequentialRecommendation(ctx context.Context, productID string) (<-chan StreamEvent, error) {
+	ch := make(chan StreamEvent, 32)
+	slog.Info("LLM request (stub)", "mode", "stub", "kind", "sequential_recommendation", "product_id", productID)
+	go func() {
+		defer close(ch)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(300 * time.Millisecond):
+		}
+		args := RecommendProductArgs{
+			ProductID:          productID,
+			IntroductionSpeech: "こちらの商品をおすすめします！",
+			Reason:             "人気のフレーバーです",
+		}
+		raw, _ := json.Marshal(args)
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- StreamEvent{
+			Type:         "function_call",
+			FunctionName: "recommend_product",
+			FunctionArgs: raw,
+		}:
+		}
+	}()
+	return ch, nil
+}
 
 func (s *StubClient) Close() error {
 	return nil

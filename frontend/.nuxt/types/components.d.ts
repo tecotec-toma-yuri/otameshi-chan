@@ -19,6 +19,7 @@ interface _GlobalComponents {
   ErrorBanner: typeof import("../../components/ErrorBanner.vue")['default']
   ProductCard: typeof import("../../components/ProductCard.vue")['default']
   ProductCardList: typeof import("../../components/ProductCardList.vue")['default']
+  ProductDetailModal: typeof import("../../components/ProductDetailModal.vue")['default']
   SessionConfigPanel: typeof import("../../components/SessionConfigPanel.vue")['default']
   StatusIndicator: typeof import("../../components/StatusIndicator.vue")['default']
   VolumeMeter: typeof import("../../components/VolumeMeter.vue")['default']
@@ -50,6 +51,7 @@ interface _GlobalComponents {
   LazyErrorBanner: LazyComponent<typeof import("../../components/ErrorBanner.vue")['default']>
   LazyProductCard: LazyComponent<typeof import("../../components/ProductCard.vue")['default']>
   LazyProductCardList: LazyComponent<typeof import("../../components/ProductCardList.vue")['default']>
+  LazyProductDetailModal: LazyComponent<typeof import("../../components/ProductDetailModal.vue")['default']>
   LazySessionConfigPanel: LazyComponent<typeof import("../../components/SessionConfigPanel.vue")['default']>
   LazyStatusIndicator: LazyComponent<typeof import("../../components/StatusIndicator.vue")['default']>
   LazyVolumeMeter: LazyComponent<typeof import("../../components/VolumeMeter.vue")['default']>

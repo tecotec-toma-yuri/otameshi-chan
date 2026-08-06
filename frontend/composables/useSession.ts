@@ -126,7 +126,11 @@ export function useSession() {
         }
 
         if (msg.is_final) {
-          pendingListeningTransition.value = true
+          if (!audioPlayback.isPlaying.value) {
+            state.value = 'listening'
+          } else {
+            pendingListeningTransition.value = true
+          }
         }
         break
 

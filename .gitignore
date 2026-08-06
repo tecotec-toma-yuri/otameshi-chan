@@ -1,5 +1,5 @@
 **/.env
 backend/data/config.yaml
 backend/data/history/
+frontend/.nuxt/
 logs/
-

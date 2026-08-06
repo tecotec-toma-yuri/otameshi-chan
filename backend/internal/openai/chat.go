@@ -473,12 +473,19 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 		Stream:   true,
 	}
 
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		slog.Error("failed to marshal chat request", "error", err)
+		return
+	}
+
 	slog.Info("LLM request",
 		"url", c.baseURL+"/chat/completions",
 		"model", model,
 		"stream", true,
 		"message_count", len(messages),
 		"tool_count", len(reqTools),
+		"params", string(body),
 	)
 
 	c.streamAndParse(ctx, &reqBody, ch, started, reqTools)

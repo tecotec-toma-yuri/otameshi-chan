@@ -157,8 +157,11 @@ export function useSession() {
 
         if (msg.audio_chunk) {
           audioPlayback.playAudio(msg.audio_chunk)
+          state.value = 'ai_speaking'
+          pendingListeningTransition.value = true
+        } else {
+          state.value = 'listening'
         }
-        state.value = 'ai_speaking'
         break
 
       case 'history_restore':

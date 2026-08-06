@@ -673,10 +673,12 @@ func (c *ChatCompletionClient) streamAndParse(ctx context.Context, reqBody *chat
 				// Pass cleaned text along with the first function_call event
 				// so the session manager can finalize the text bubble.
 				cleanedText := stripFunctionCallMarkup(fullText)
+				historyAdded := false
 				if cleanedText != "" && !textDoneSent {
 					c.mu.Lock()
 					c.history = append(c.history, ChatMessage{Role: "assistant", Content: cleanedText})
 					c.mu.Unlock()
+					historyAdded = true
 				}
 
 				first := true
@@ -688,6 +690,7 @@ func (c *ChatCompletionClient) streamAndParse(ctx context.Context, reqBody *chat
 						c.mu.Lock()
 						c.history = append(c.history, ChatMessage{Role: "assistant", Content: speech})
 						c.mu.Unlock()
+						historyAdded = true
 					}
 
 					ev := StreamEvent{
@@ -705,6 +708,15 @@ func (c *ChatCompletionClient) streamAndParse(ctx context.Context, reqBody *chat
 						return
 					case ch <- ev:
 					}
+				}
+
+				// Ensure an assistant turn exists in history to prevent consecutive user messages.
+				// This happens when the model emits a tool call with no text content and no speech
+				// (e.g. assess_interest with response_text="" for low-interest turns).
+				if !historyAdded && !textDoneSent {
+					c.mu.Lock()
+					c.history = append(c.history, ChatMessage{Role: "assistant", Content: "（処理中）"})
+					c.mu.Unlock()
 				}
 			}
 		}

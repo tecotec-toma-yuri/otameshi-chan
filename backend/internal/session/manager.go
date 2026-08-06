@@ -492,6 +492,8 @@ func (m *Manager) startLLMPipeline(
 			if !resumed && m.isCurrentGeneration(gen) {
 				m.state.Transition(StateListening)
 				m.silenceTimer.Resume()
+				// Notify frontend to exit processing/ai_speaking state
+				m.send(protocol.TypeClearAudioBuffer, protocol.ClearAudioBuffer{Reason: "pipeline_error"})
 			}
 		}()
 
@@ -801,8 +803,12 @@ func (m *Manager) handleAssessInterest(ctx context.Context, args openai.AssessIn
 		})
 	}
 
+	// Stage 2: replace system prompt with base prompt + catalog only.
+	// Removing interest-assessment guidelines prevents the LLM from trying
+	// to call assess_interest (not in Stage 2 tools) and triggering a 400 error.
 	catalogText := openai.BuildProductCatalogPrompt(cfg.Products)
-	m.aiClient.InjectProductCatalog(catalogText)
+	stage2Prompt := cfg.SystemPrompt + "\n\n" + catalogText
+	m.aiClient.UpdateSystemPrompt(stage2Prompt)
 	m.aiClient.SetRecommendationTools(cfg.Products)
 
 	slog.Info("stage2_triggered",

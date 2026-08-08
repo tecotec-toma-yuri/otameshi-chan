@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,6 +35,9 @@ func main() {
 		port = "8080"
 	}
 
+	baseCtx, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+
 	wsHandler := wshandler.NewHandler(newLLMClient, newTTSService, newSTTService, newGuardrailMonitor)
 	r := router.New(wsHandler)
 
@@ -41,6 +45,7 @@ func main() {
 		Addr:        ":" + port,
 		Handler:     r,
 		IdleTimeout: 120 * time.Second,
+		BaseContext: func(_ net.Listener) context.Context { return baseCtx },
 	}
 
 	quit := make(chan os.Signal, 1)

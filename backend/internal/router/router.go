@@ -11,12 +11,13 @@ import (
 
 func New(wsHandler *ws.Handler) chi.Router {
 	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.RequestID)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{config.Get().CORSOrigin},
 		AllowedMethods: []string{"GET", "PUT", "POST", "OPTIONS"},
 		AllowedHeaders: []string{"Content-Type", "Authorization"},
 	}))
-	r.Use(middleware.RequestID)
 	r.Handle("/ws", wsHandler)
 	r.Get("/health", rest.HandleHealth)
 	r.Route("/api", func(r chi.Router) {

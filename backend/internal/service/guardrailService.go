@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/otameshi/backend/internal/config"
 )
 
 // GuardrailMonitor checks text for content policy violations.
@@ -26,13 +27,14 @@ type LLMGuardrailMonitor struct {
 }
 
 func NewGuardrailMonitor() *LLMGuardrailMonitor {
-	baseURL := os.Getenv("OPENAI_BASE_URL")
+	cfg := config.Get()
+	baseURL := cfg.OpenAIBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.groq.com/openai/v1"
 	}
 	return &LLMGuardrailMonitor{
 		baseURL: baseURL,
-		apiKey:  os.Getenv("OPENAI_API_KEY"),
+		apiKey:  cfg.OpenAIAPIKey,
 		model:   "llama-3.1-8b-instant",
 		client:  &http.Client{Timeout: 5 * time.Second},
 	}

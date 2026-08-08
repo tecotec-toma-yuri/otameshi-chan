@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -92,13 +91,13 @@ type ChatCompletionClient struct {
 }
 
 func NewChatCompletionClient() *ChatCompletionClient {
-	apiKey := os.Getenv("OPENAI_API_KEY")
 	cfg := config.Get()
+	apiKey := cfg.OpenAIAPIKey
 	model := cfg.LLMModel
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	baseURL := os.Getenv("OPENAI_BASE_URL")
+	baseURL := cfg.OpenAIBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}

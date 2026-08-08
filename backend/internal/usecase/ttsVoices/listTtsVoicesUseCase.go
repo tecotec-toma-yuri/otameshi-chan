@@ -5,8 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
+
+	"github.com/otameshi/backend/internal/config"
 )
 
 type VoicesResult struct {
@@ -15,7 +16,7 @@ type VoicesResult struct {
 }
 
 func FetchTTSVoices(ctx context.Context) ([]byte, error) {
-	ttsURL := os.Getenv("TTS_URL")
+	ttsURL := config.Get().TTSURL
 	if ttsURL == "" {
 		return nil, nil
 	}

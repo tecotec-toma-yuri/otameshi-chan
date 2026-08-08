@@ -35,6 +35,16 @@ type Config struct {
 	STTLanguage       string    `json:"stt_language" yaml:"stt_language"`
 	STTPrompt         string    `json:"stt_prompt" yaml:"stt_prompt"`
 	Products          []Product `json:"products" yaml:"products"`
+
+	// Infrastructure
+	LLMMode       string `json:"llm_mode" yaml:"llm_mode"`
+	OpenAIAPIKey  string `json:"openai_api_key" yaml:"openai_api_key"`
+	OpenAIBaseURL string `json:"openai_base_url" yaml:"openai_base_url"`
+	GroqAPIKey    string `json:"groq_api_key" yaml:"groq_api_key"`
+	TTSURL        string `json:"tts_url" yaml:"tts_url"`
+	VoicevoxURL   string `json:"voicevox_url" yaml:"voicevox_url"`
+	STTURL        string `json:"stt_url" yaml:"stt_url"`
+	CORSOrigin    string `json:"cors_origin" yaml:"cors_origin"`
 }
 
 var (
@@ -70,6 +80,14 @@ func defaultConfig() Config {
 		STTModel:          envOrDefault("STT_MODEL", "whisper-large-v3-turbo"),
 		STTLanguage:       envOrDefault("STT_LANGUAGE", "ja"),
 		STTPrompt:         envOrDefault("STT_PROMPT", ""),
+		LLMMode:       envOrDefault("LLM_MODE", "stub"),
+		OpenAIAPIKey:  envOrDefault("OPENAI_API_KEY", ""),
+		OpenAIBaseURL: envOrDefault("OPENAI_BASE_URL", ""),
+		GroqAPIKey:    envOrDefault("GROQ_API_KEY", ""),
+		TTSURL:        envOrDefault("TTS_URL", ""),
+		VoicevoxURL:   envOrDefault("VOICEVOX_URL", "http://voicevox:50021"),
+		STTURL:        envOrDefault("STT_URL", ""),
+		CORSOrigin:    envOrDefault("CORS_ORIGIN", "http://localhost:3000"),
 		Products: []Product{
 			{ID: "h001", Name: "ハイチュウ ＜グレープ＞", Price: 140, Description: "ジューシーな果汁感あふれる定番フレーバー", ImageURL: "/images/h001.png"},
 			{ID: "h002", Name: "ハイチュウ ＜ストロベリー＞", Price: 140, Description: "いちごの華やかな香りと甘酸っぱさ", ImageURL: "/images/h002.png"},

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -22,9 +21,10 @@ type GroqSTT struct {
 }
 
 func NewGroqSTT() *GroqSTT {
-	apiKey := os.Getenv("GROQ_API_KEY")
+	cfg := config.Get()
+	apiKey := cfg.GroqAPIKey
 	if apiKey == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
+		apiKey = cfg.OpenAIAPIKey
 	}
 	return &GroqSTT{
 		apiKey: apiKey,

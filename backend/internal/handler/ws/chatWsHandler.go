@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/otameshi/backend/internal/config"
 	"github.com/otameshi/backend/internal/external/llm"
+	"github.com/otameshi/backend/internal/external/stt"
+	"github.com/otameshi/backend/internal/external/tts"
 	"github.com/otameshi/backend/internal/protocol"
 	"github.com/otameshi/backend/internal/service"
 	"github.com/otameshi/backend/internal/usecase/chat"
@@ -19,19 +21,25 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 	CheckOrigin: func(r *http.Request) bool {
-		allowed := os.Getenv("CORS_ORIGIN")
-		if allowed == "" {
-			allowed = "http://localhost:3000"
-		}
 		origin := r.Header.Get("Origin")
-		return origin == "" || strings.HasPrefix(origin, allowed)
+		return origin == "" || strings.HasPrefix(origin, config.Get().CORSOrigin)
 	},
 }
 
-type Handler struct{}
+type Handler struct {
+	newLLM   func() llm.RealtimeClient
+	newTTS   func() tts.TTSService
+	newSTT   func() stt.STTService
+	newGuard func() service.GuardrailMonitor
+}
 
-func NewHandler() *Handler {
-	return &Handler{}
+func NewHandler(
+	newLLM func() llm.RealtimeClient,
+	newTTS func() tts.TTSService,
+	newSTT func() stt.STTService,
+	newGuard func() service.GuardrailMonitor,
+) *Handler {
+	return &Handler{newLLM: newLLM, newTTS: newTTS, newSTT: newSTT, newGuard: newGuard}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -50,8 +58,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	cfg := h.parseConfigFromQuery(r)
-	mgr := chat.NewManager(cfg)
+	cfg := parseConfigFromQuery(r)
+	mgr := chat.NewManager(cfg, h.newLLM(), h.newTTS(), h.newSTT(), h.newGuard())
 	defer mgr.Close()
 
 	if restoreID := r.URL.Query().Get("restore_session_id"); restoreID != "" {
@@ -121,18 +129,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) parseConfigFromQuery(r *http.Request) protocol.SessionConfig {
+func parseConfigFromQuery(r *http.Request) protocol.SessionConfig {
 	cfg := protocol.SessionConfig{
 		RecommendationMode:         "ai_driven",
 		PostRecommendationBehavior: "return_to_conversation",
 	}
-
 	if mode := r.URL.Query().Get("recommendation_mode"); mode != "" {
 		cfg.RecommendationMode = mode
 	}
 	if behavior := r.URL.Query().Get("post_recommendation_behavior"); behavior != "" {
 		cfg.PostRecommendationBehavior = behavior
 	}
-
 	return cfg
 }

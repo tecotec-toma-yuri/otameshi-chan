@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/otameshi/backend/internal/config"
 )
 
 type ModelInfo struct {
@@ -36,8 +37,9 @@ var groqProductionModels = map[string]struct{}{
 
 // ListModels fetches available model IDs from the configured OpenAI-compatible /models API.
 func ListModels(ctx context.Context) ([]ModelInfo, error) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	baseURL := os.Getenv("OPENAI_BASE_URL")
+	cfg := config.Get()
+	apiKey := cfg.OpenAIAPIKey
+	baseURL := cfg.OpenAIBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}

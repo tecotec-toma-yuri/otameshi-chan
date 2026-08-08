@@ -1,11 +1,10 @@
 package router
 
 import (
-	"os"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/otameshi/backend/internal/config"
 	"github.com/otameshi/backend/internal/handler/rest"
 	"github.com/otameshi/backend/internal/handler/ws"
 )
@@ -13,7 +12,7 @@ import (
 func New(wsHandler *ws.Handler) chi.Router {
 	r := chi.NewRouter()
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: []string{os.Getenv("CORS_ORIGIN")},
+		AllowedOrigins: []string{config.Get().CORSOrigin},
 		AllowedMethods: []string{"GET", "PUT", "POST", "OPTIONS"},
 		AllowedHeaders: []string{"Content-Type", "Authorization"},
 	}))

@@ -34,7 +34,7 @@ func main() {
 		port = "8080"
 	}
 
-	wsHandler := wshandler.NewHandler()
+	wsHandler := wshandler.NewHandler(newLLMClient, newTTSService, newSTTService, newGuardrailMonitor)
 	r := router.New(wsHandler)
 
 	srv := &http.Server{

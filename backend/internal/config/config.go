@@ -37,6 +37,34 @@ type Config struct {
 	Products          []Product `json:"products" yaml:"products"`
 }
 
+// InfraConfig holds environment-derived settings for external connectivity
+// (API keys, service URLs, CORS). Unlike Config, it is never persisted to
+// the config file and never exposed via the /api/config endpoint.
+type InfraConfig struct {
+	LLMMode       string
+	OpenAIAPIKey  string
+	OpenAIBaseURL string
+	GroqAPIKey    string
+	TTSURL        string
+	VoicevoxURL   string
+	STTURL        string
+	CORSOrigin    string
+}
+
+// Infra reads infrastructure settings directly from the environment.
+func Infra() InfraConfig {
+	return InfraConfig{
+		LLMMode:       envOrDefault("LLM_MODE", "stub"),
+		OpenAIAPIKey:  envOrDefault("OPENAI_API_KEY", ""),
+		OpenAIBaseURL: envOrDefault("OPENAI_BASE_URL", ""),
+		GroqAPIKey:    envOrDefault("GROQ_API_KEY", ""),
+		TTSURL:        envOrDefault("TTS_URL", ""),
+		VoicevoxURL:   envOrDefault("VOICEVOX_URL", "http://voicevox:50021"),
+		STTURL:        envOrDefault("STT_URL", ""),
+		CORSOrigin:    envOrDefault("CORS_ORIGIN", "http://localhost:3000"),
+	}
+}
+
 var (
 	mu       sync.RWMutex
 	current  Config

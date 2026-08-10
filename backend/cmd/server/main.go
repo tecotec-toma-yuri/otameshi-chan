@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,12 +11,11 @@ import (
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
-	"github.com/otameshi/backend/internal/handler"
-	"github.com/otameshi/backend/internal/logging"
+	"github.com/otameshi/backend/internal/router"
 )
 
 func main() {
-	logCloser, err := logging.Setup()
+	logCloser, err := config.SetupLogging()
 	if err != nil {
 		slog.Error("failed to setup file logging, using stdout only", "error", err)
 	}
@@ -34,74 +34,16 @@ func main() {
 		port = "8080"
 	}
 
-	wsHandler := handler.NewWSHandler()
+	baseCtx, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
 
-	mux := http.NewServeMux()
-	mux.Handle("/ws", corsMiddleware(wsHandler))
-	mux.HandleFunc("/api/config", corsHandleFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handler.HandleConfigGet(w, r)
-		case http.MethodPut:
-			handler.HandleConfigPut(w, r)
-		case http.MethodOptions:
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}))
-	mux.HandleFunc("/api/models", corsHandleFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handler.HandleModelsGet(w, r)
-		case http.MethodOptions:
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}))
-	mux.HandleFunc("/api/tts/voices", corsHandleFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handler.HandleTTSVoicesGet(w, r)
-		case http.MethodOptions:
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}))
-
-	mux.HandleFunc("/api/history", corsHandleFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handler.HandleHistoryList(w, r)
-		case http.MethodOptions:
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}))
-	mux.HandleFunc("/api/history/", corsHandleFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handler.HandleHistoryGet(w, r)
-		case http.MethodOptions:
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}))
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-	})
+	r := router.New()
 
 	srv := &http.Server{
 		Addr:        ":" + port,
-		Handler:     mux,
+		Handler:     r,
 		IdleTimeout: 120 * time.Second,
+		BaseContext: func(_ net.Listener) context.Context { return baseCtx },
 	}
 
 	quit := make(chan os.Signal, 1)
@@ -126,32 +68,4 @@ func main() {
 	}
 
 	slog.Info("server stopped")
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func corsHandleFunc(fn http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		fn(w, r)
-	}
-}
-
-func setCORS(w http.ResponseWriter) {
-	origin := os.Getenv("CORS_ORIGIN")
-	if origin == "" {
-		origin = "http://localhost:3000"
-	}
-	w.Header().Set("Access-Control-Allow-Origin", origin)
-	w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }

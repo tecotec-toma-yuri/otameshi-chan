@@ -10,8 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/otameshi/backend/internal/config"
 	"github.com/otameshi/backend/internal/external/llm"
-	"github.com/otameshi/backend/internal/external/stt"
-	"github.com/otameshi/backend/internal/external/tts"
+	"github.com/otameshi/backend/internal/factory"
 	"github.com/otameshi/backend/internal/protocol"
 	"github.com/otameshi/backend/internal/service"
 	"github.com/otameshi/backend/internal/usecase/chat"
@@ -22,24 +21,16 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 4096,
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-		return origin == "" || strings.HasPrefix(origin, config.Get().CORSOrigin)
+		return origin == "" || strings.HasPrefix(origin, config.Infra().CORSOrigin)
 	},
 }
 
 type Handler struct {
-	newLLM   func() llm.RealtimeClient
-	newTTS   func() tts.TTSService
-	newSTT   func() stt.STTService
-	newGuard func() service.GuardrailMonitor
+	svc *factory.ChatDependencies
 }
 
-func NewHandler(
-	newLLM func() llm.RealtimeClient,
-	newTTS func() tts.TTSService,
-	newSTT func() stt.STTService,
-	newGuard func() service.GuardrailMonitor,
-) *Handler {
-	return &Handler{newLLM: newLLM, newTTS: newTTS, newSTT: newSTT, newGuard: newGuard}
+func NewHandler(svc *factory.ChatDependencies) *Handler {
+	return &Handler{svc: svc}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +50,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	cfg := parseConfigFromQuery(r)
-	mgr := chat.NewManager(cfg, h.newLLM(), h.newTTS(), h.newSTT(), h.newGuard())
+	mgr := chat.NewManager(cfg, h.svc.NewLLMClient(), h.svc.NewTTSService(), h.svc.NewSTTService(), h.svc.NewGuardrailMonitor())
 	defer mgr.Close()
 
 	if restoreID := r.URL.Query().Get("restore_session_id"); restoreID != "" {

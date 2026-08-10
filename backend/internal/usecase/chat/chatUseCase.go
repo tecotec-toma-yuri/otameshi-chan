@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/otameshi/backend/internal/external/guardrail"
 	"github.com/otameshi/backend/internal/external/llm"
 	"github.com/otameshi/backend/internal/external/stt"
 	"github.com/otameshi/backend/internal/external/tts"
@@ -25,7 +26,7 @@ type Manager struct {
 	aiClient      llm.RealtimeClient
 	ttsService    tts.TTSService
 	sttService    stt.STTService
-	guard         service.GuardrailMonitor
+	guard         guardrail.GuardrailMonitor
 	sendCh        chan protocol.OutboundMessage
 	cancelCurrent context.CancelFunc
 	generation    uint64

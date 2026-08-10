@@ -5,26 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
+	"github.com/otameshi/backend/internal/external/httpclient"
 )
 
 type VoicevoxTTS struct {
-	baseURL    string
-	httpClient *http.Client
+	httpclient.BaseClient
 }
 
 func NewVoicevoxTTS(baseURL string) *VoicevoxTTS {
 	return &VoicevoxTTS{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+		BaseClient: httpclient.NewBaseClient(baseURL, 60*time.Second),
 	}
 }
 
@@ -38,28 +33,17 @@ func (v *VoicevoxTTS) Synthesize(ctx context.Context, text string) ([]byte, erro
 	speakerID := cfg.VoicevoxSpeakerID
 
 	queryURL := fmt.Sprintf("%s/audio_query?text=%s&speaker=%d",
-		v.baseURL, url.QueryEscape(text), speakerID)
-	queryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, queryURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create audio_query request: %w", err)
-	}
-
-	queryResp, err := v.httpClient.Do(queryReq)
+		v.BaseURL, url.QueryEscape(text), speakerID)
+	queryResp, err := v.Post(ctx, queryURL, "", nil, "")
 	if err != nil {
 		slog.Warn("VOICEVOX audio_query failed, falling back to stub", "error", err)
 		return NewStubTTS().Synthesize(ctx, text)
 	}
-	defer queryResp.Body.Close()
-
-	if queryResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(queryResp.Body)
-		slog.Warn("VOICEVOX audio_query non-200", "status", queryResp.StatusCode, "body", string(body))
-		return NewStubTTS().Synthesize(ctx, text)
-	}
 
 	var queryData json.RawMessage
-	if err := json.NewDecoder(queryResp.Body).Decode(&queryData); err != nil {
-		return nil, fmt.Errorf("decode audio_query: %w", err)
+	if err := httpclient.DecodeJSON(queryResp, &queryData); err != nil {
+		slog.Warn("VOICEVOX audio_query returned an error, falling back to stub", "error", err)
+		return NewStubTTS().Synthesize(ctx, text)
 	}
 
 	var queryMap map[string]interface{}
@@ -70,29 +54,17 @@ func (v *VoicevoxTTS) Synthesize(ctx context.Context, text string) ([]byte, erro
 		queryData, _ = json.Marshal(queryMap)
 	}
 
-	synthURL := fmt.Sprintf("%s/synthesis?speaker=%d", v.baseURL, speakerID)
-	synthReq, err := http.NewRequestWithContext(ctx, http.MethodPost, synthURL, bytes.NewReader(queryData))
-	if err != nil {
-		return nil, fmt.Errorf("create synthesis request: %w", err)
-	}
-	synthReq.Header.Set("Content-Type", "application/json")
-
-	synthResp, err := v.httpClient.Do(synthReq)
+	synthURL := fmt.Sprintf("%s/synthesis?speaker=%d", v.BaseURL, speakerID)
+	synthResp, err := v.Post(ctx, synthURL, "application/json", bytes.NewReader(queryData), "")
 	if err != nil {
 		slog.Warn("VOICEVOX synthesis failed, falling back to stub", "error", err)
 		return NewStubTTS().Synthesize(ctx, text)
 	}
-	defer synthResp.Body.Close()
 
-	if synthResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(synthResp.Body)
-		slog.Warn("VOICEVOX synthesis non-200", "status", synthResp.StatusCode, "body", string(body))
-		return NewStubTTS().Synthesize(ctx, text)
-	}
-
-	data, err := io.ReadAll(synthResp.Body)
+	data, err := httpclient.ReadBody(synthResp)
 	if err != nil {
-		return nil, fmt.Errorf("read synthesis response: %w", err)
+		slog.Warn("VOICEVOX synthesis returned an error, falling back to stub", "error", err)
+		return NewStubTTS().Synthesize(ctx, text)
 	}
 
 	opus, err := WavToOpus(ctx, data)

@@ -2,7 +2,6 @@ package llm
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
+	"github.com/otameshi/backend/internal/external/httpclient"
 )
 
 type ChatMessage struct {
@@ -80,24 +80,24 @@ type streamFnCall struct {
 }
 
 type ChatCompletionClient struct {
+	httpclient.BaseClient
 	mu            sync.Mutex
 	apiKey        string
 	model         string
-	baseURL       string
 	history       []ChatMessage
 	tools         []chatTool
 	toolsDisabled bool
-	client        *http.Client
 }
 
 func NewChatCompletionClient() *ChatCompletionClient {
 	cfg := config.Get()
-	apiKey := cfg.OpenAIAPIKey
+	infra := config.Infra()
+	apiKey := infra.OpenAIAPIKey
 	model := cfg.LLMModel
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	baseURL := cfg.OpenAIBaseURL
+	baseURL := infra.OpenAIBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
@@ -105,11 +105,10 @@ func NewChatCompletionClient() *ChatCompletionClient {
 	systemPrompt := buildSystemPrompt(cfg)
 
 	c := &ChatCompletionClient{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: baseURL,
-		client:  &http.Client{Timeout: 120 * time.Second},
-		tools:   buildTools(cfg.Products),
+		BaseClient: httpclient.NewBaseClient(baseURL, 120*time.Second),
+		apiKey:     apiKey,
+		model:      model,
+		tools:      buildTools(cfg.Products),
 		history: []ChatMessage{
 			{Role: "system", Content: systemPrompt},
 		},
@@ -258,17 +257,7 @@ func buildSystemPrompt(cfg config.Config) string {
 }
 
 func (c *ChatCompletionClient) doHTTPRequest(ctx context.Context, reqBody *chatRequest) (*http.Response, error) {
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	return c.client.Do(req)
+	return c.PostJSON(ctx, "/chat/completions", reqBody, c.apiKey)
 }
 
 func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []ChatMessage, ch chan<- StreamEvent, includeTools bool) {
@@ -301,7 +290,7 @@ func (c *ChatCompletionClient) doStreamRequest(ctx context.Context, messages []C
 	}
 
 	slog.Info("LLM request",
-		"url", c.baseURL+"/chat/completions",
+		"url", c.BaseURL+"/chat/completions",
 		"model", model,
 		"stream", true,
 		"message_count", len(messages),

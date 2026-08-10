@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
-	wshandler "github.com/otameshi/backend/internal/handler/ws"
 	"github.com/otameshi/backend/internal/router"
 )
 
@@ -38,8 +37,7 @@ func main() {
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	defer cancelBase()
 
-	wsHandler := wshandler.NewHandler(newLLMClient, newTTSService, newSTTService, newGuardrailMonitor)
-	r := router.New(wsHandler)
+	r := router.New()
 
 	srv := &http.Server{
 		Addr:        ":" + port,

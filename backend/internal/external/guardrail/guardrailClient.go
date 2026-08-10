@@ -1,42 +1,31 @@
-package service
+package guardrail
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
+	"github.com/otameshi/backend/internal/external/httpclient"
 )
-
-// GuardrailMonitor checks text for content policy violations.
-type GuardrailMonitor interface {
-	Check(ctx context.Context, text string) (passed bool, reason string, err error)
-}
 
 // LLMGuardrailMonitor uses an LLM API to check content policy.
 type LLMGuardrailMonitor struct {
-	baseURL string
-	apiKey  string
-	model   string
-	client  *http.Client
+	httpclient.BaseClient
+	apiKey string
+	model  string
 }
 
 func NewGuardrailMonitor() *LLMGuardrailMonitor {
-	cfg := config.Get()
-	baseURL := cfg.OpenAIBaseURL
+	infra := config.Infra()
+	baseURL := infra.OpenAIBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.groq.com/openai/v1"
 	}
 	return &LLMGuardrailMonitor{
-		baseURL: baseURL,
-		apiKey:  cfg.OpenAIAPIKey,
-		model:   "llama-3.1-8b-instant",
-		client:  &http.Client{Timeout: 5 * time.Second},
+		BaseClient: httpclient.NewBaseClient(baseURL, 5*time.Second),
+		apiKey:     infra.OpenAIAPIKey,
+		model:      "llama-3.1-8b-instant",
 	}
 }
 
@@ -81,38 +70,20 @@ func (m *LLMGuardrailMonitor) Check(ctx context.Context, text string) (bool, str
 		return true, "", nil
 	}
 
-	body, err := json.Marshal(moderationRequest{
+	resp, err := m.PostJSON(ctx, "/chat/completions", moderationRequest{
 		Model: m.model,
 		Messages: []moderationMessage{
 			{Role: "system", Content: moderationPrompt},
 			{Role: "user", Content: text},
 		},
 		Stream: false,
-	})
+	}, m.apiKey)
 	if err != nil {
 		return true, "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return true, "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
-
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return true, "", fmt.Errorf("moderation request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body)
-		return true, "", fmt.Errorf("moderation API returned %d", resp.StatusCode)
 	}
 
 	var modResp moderationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&modResp); err != nil {
+	if err := httpclient.DecodeJSON(resp, &modResp); err != nil {
 		return true, "", err
 	}
 
@@ -128,24 +99,6 @@ func (m *LLMGuardrailMonitor) Check(ctx context.Context, text string) (bool, str
 
 	if result.Flagged {
 		return false, result.Category, nil
-	}
-	return true, "", nil
-}
-
-// StubGuardrailMonitor is a guardrail monitor that always passes, except for test triggers.
-type StubGuardrailMonitor struct{}
-
-// NewStubGuardrailMonitor creates a new StubGuardrailMonitor.
-func NewStubGuardrailMonitor() *StubGuardrailMonitor {
-	return &StubGuardrailMonitor{}
-}
-
-// Check performs a content policy check. Always passes unless text contains "violation_test".
-func (m *StubGuardrailMonitor) Check(_ context.Context, text string) (bool, string, error) {
-	time.Sleep(50 * time.Millisecond)
-
-	if strings.Contains(text, "violation_test") {
-		return false, "content_policy_violation", nil
 	}
 	return true, "", nil
 }

@@ -4,11 +4,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/otameshi/backend/internal/external/guardrail"
 	"github.com/otameshi/backend/internal/external/llm"
 	"github.com/otameshi/backend/internal/external/stt"
 	"github.com/otameshi/backend/internal/external/tts"
 	"github.com/otameshi/backend/internal/protocol"
-	"github.com/otameshi/backend/internal/service"
 )
 
 func generateUUID() string {
@@ -20,7 +20,7 @@ func NewManager(
 	aiClient llm.RealtimeClient,
 	ttsService tts.TTSService,
 	sttService stt.STTService,
-	guard service.GuardrailMonitor,
+	guard guardrail.GuardrailMonitor,
 ) *Manager {
 	m := &Manager{
 		sessionID:  generateUUID(),

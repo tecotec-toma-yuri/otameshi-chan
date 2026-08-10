@@ -3,31 +3,25 @@ package stt
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"mime/multipart"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
+	"github.com/otameshi/backend/internal/external/httpclient"
 )
 
 type WhisperSTT struct {
-	baseURL    string
-	language   string
-	httpClient *http.Client
+	httpclient.BaseClient
+	language string
 }
 
 func NewWhisperSTT(baseURL string) *WhisperSTT {
 	return &WhisperSTT{
-		baseURL:  baseURL,
-		language: "ja",
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+		BaseClient: httpclient.NewBaseClient(baseURL, 60*time.Second),
+		language:   "ja",
 	}
 }
 
@@ -61,29 +55,17 @@ func (w *WhisperSTT) Transcribe(ctx context.Context, audioData []byte) (Transcri
 
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.baseURL+"/inference", &body)
-	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := w.httpClient.Do(req)
+	resp, err := w.Post(ctx, w.BaseURL+"/inference", writer.FormDataContentType(), &body, "")
 	if err != nil {
 		return TranscribeResult{}, fmt.Errorf("whisper request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return TranscribeResult{}, fmt.Errorf("whisper returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
 		Text     string `json:"text"`
 		Language string `json:"language"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return TranscribeResult{}, fmt.Errorf("decode response: %w", err)
+	if err := httpclient.DecodeJSON(resp, &result); err != nil {
+		return TranscribeResult{}, fmt.Errorf("whisper: %w", err)
 	}
 
 	text := strings.TrimSpace(result.Text)

@@ -37,9 +37,9 @@ var groqProductionModels = map[string]struct{}{
 
 // ListModels fetches available model IDs from the configured OpenAI-compatible /models API.
 func ListModels(ctx context.Context) ([]ModelInfo, error) {
-	cfg := config.Get()
-	apiKey := cfg.OpenAIAPIKey
-	baseURL := cfg.OpenAIBaseURL
+	infra := config.Infra()
+	apiKey := infra.OpenAIAPIKey
+	baseURL := infra.OpenAIBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}

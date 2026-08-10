@@ -1,29 +1,21 @@
 package tts
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
+	"github.com/otameshi/backend/internal/external/httpclient"
 )
 
 type PiperTTS struct {
-	baseURL    string
-	httpClient *http.Client
+	httpclient.BaseClient
 }
 
 func NewPiperTTS(baseURL string) *PiperTTS {
 	return &PiperTTS{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		BaseClient: httpclient.NewBaseClient(baseURL, 30*time.Second),
 	}
 }
 
@@ -81,7 +73,8 @@ func (p *PiperTTS) SynthesizeWithLang(ctx context.Context, text string, language
 		}
 		voice = "base_6lang"
 	}
-	body, err := json.Marshal(synthesizeRequest{
+
+	resp, err := p.PostJSON(ctx, "/synthesize", synthesizeRequest{
 		Text:        text,
 		Voice:       voice,
 		SpeakerID:   speakerID,
@@ -89,32 +82,16 @@ func (p *PiperTTS) SynthesizeWithLang(ctx context.Context, text string, language
 		LengthScale: cfg.TTSLengthScale,
 		NoiseScale:  cfg.TTSNoiseScale,
 		NoiseW:      cfg.TTSNoiseW,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/synthesize", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.httpClient.Do(req)
+	}, "")
 	if err != nil {
 		slog.Warn("Piper TTS request failed, falling back to stub", "error", err)
 		return NewStubTTS().Synthesize(ctx, text)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		slog.Warn("Piper TTS returned non-200", "status", resp.StatusCode)
-		return NewStubTTS().Synthesize(ctx, text)
-	}
-
-	data, err := io.ReadAll(resp.Body)
+	data, err := httpclient.ReadBody(resp)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		slog.Warn("Piper TTS returned an error, falling back to stub", "error", err)
+		return NewStubTTS().Synthesize(ctx, text)
 	}
 
 	opus, err := WavToOpus(ctx, data)

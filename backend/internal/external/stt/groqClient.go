@@ -3,34 +3,30 @@ package stt
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"mime/multipart"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/otameshi/backend/internal/config"
+	"github.com/otameshi/backend/internal/external/httpclient"
 )
 
 type GroqSTT struct {
-	apiKey     string
-	httpClient *http.Client
+	httpclient.BaseClient
+	apiKey string
 }
 
 func NewGroqSTT() *GroqSTT {
-	cfg := config.Get()
-	apiKey := cfg.GroqAPIKey
+	infra := config.Infra()
+	apiKey := infra.GroqAPIKey
 	if apiKey == "" {
-		apiKey = cfg.OpenAIAPIKey
+		apiKey = infra.OpenAIAPIKey
 	}
 	return &GroqSTT{
-		apiKey: apiKey,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+		BaseClient: httpclient.NewBaseClient("https://api.groq.com/openai/v1", 60*time.Second),
+		apiKey:     apiKey,
 	}
 }
 
@@ -67,34 +63,17 @@ func (g *GroqSTT) Transcribe(ctx context.Context, audioData []byte) (TranscribeR
 
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.groq.com/openai/v1/audio/transcriptions", &body)
-	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+g.apiKey)
-
-	resp, err := g.httpClient.Do(req)
+	resp, err := g.Post(ctx, g.BaseURL+"/audio/transcriptions", writer.FormDataContentType(), &body, g.apiKey)
 	if err != nil {
 		return TranscribeResult{}, fmt.Errorf("groq stt request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return TranscribeResult{}, fmt.Errorf("groq stt returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
 		Text     string `json:"text"`
 		Language string `json:"language"`
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return TranscribeResult{}, fmt.Errorf("decode response: %w", err)
+	if err := httpclient.DecodeJSON(resp, &result); err != nil {
+		return TranscribeResult{}, fmt.Errorf("groq stt: %w", err)
 	}
 
 	text := strings.TrimSpace(result.Text)

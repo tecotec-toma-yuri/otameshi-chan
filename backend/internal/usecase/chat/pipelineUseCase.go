@@ -177,8 +177,17 @@ func (m *Manager) startLLMPipeline(
 
 				<-ttsDone
 
-				// TTS が中断されても、生成済みのテキストは確定させる。
-				// text_done を送らないとクライアント側のストリーミング表示が終わらない。
+				// 中断された世代は text_done を送らない。クライアント側は
+				// clear_audio_buffer を受けて表示を確定させる。
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				if !m.isCurrentGeneration(gen) {
+					return
+				}
+
 				ttsMu.Lock()
 				ttsMs := totalTTSMs
 				ttsMu.Unlock()
@@ -213,11 +222,8 @@ func (m *Manager) startLLMPipeline(
 					"assistant_text", fullText,
 				)
 
-				// 割り込み後は後続の世代が状態を管理しているため上書きしない
-				if m.isCurrentGeneration(gen) {
-					m.state.Transition(StateListening)
-					m.silenceTimer.Resume()
-				}
+				m.state.Transition(StateListening)
+				m.silenceTimer.Resume()
 				resumed = true
 
 			case "function_call":

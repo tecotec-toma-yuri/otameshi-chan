@@ -169,6 +169,13 @@ export function useSession() {
 
       case 'clear_audio_buffer':
         audioPlayback.stopAndClear()
+        {
+          const interruptedMsg = messages.value[messages.value.length - 1]
+          if (interruptedMsg && interruptedMsg.role === 'ai' && interruptedMsg.streaming) {
+            interruptedMsg.streaming = false
+          }
+        }
+        streamingText.value = ''
         if (state.value !== 'completed') {
           state.value = 'listening'
         }

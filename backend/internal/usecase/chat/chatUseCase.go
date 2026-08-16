@@ -73,6 +73,7 @@ func (m *Manager) sendGreeting() {
 	requestID := generateUUID()[:8]
 	pipelineStart := time.Now()
 	slog.Info("requesting greeting from LLM", "session_id", m.sessionID, "request_id", requestID)
+	m.state.Transition(StateProcessing)
 	m.startLLMPipeline(requestID, pipelineStart, 0, "", func(ctx context.Context) (<-chan llm.StreamEvent, error) {
 		return m.aiClient.RequestGreeting(ctx)
 	})

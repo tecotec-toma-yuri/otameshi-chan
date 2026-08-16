@@ -19,8 +19,16 @@ export function useSession() {
   const currentProducts = ref<ProductInfo[]>([])
   const errorMessage = ref('')
   const errorType = ref<'error' | 'warning'>('error')
-  const streamingText = ref('')
   const pendingListeningTransition = ref(false)
+
+  // ストリーミング中のAIメッセージ。マイク割り込みではユーザー発話が先に
+  // 配列へ積まれるため「配列の最後」では特定できず、参照で追跡する。
+  let streamingMsg: ConversationMessage | null = null
+
+  function pushAIMessage(init: Omit<ConversationMessage, 'role' | 'timestamp'>): ConversationMessage {
+    messages.value.push({ role: 'ai', timestamp: new Date(), ...init })
+    return messages.value[messages.value.length - 1]!
+  }
 
   const websocket = useWebSocket()
   const audioPlayback = useAudioPlayback()
@@ -77,19 +85,10 @@ export function useSession() {
     switch (msg.type) {
       case 'text_delta':
         state.value = 'ai_speaking'
-        streamingText.value += msg.text
-        {
-          const lastMsg = messages.value[messages.value.length - 1]
-          if (lastMsg && lastMsg.role === 'ai' && lastMsg.streaming) {
-            lastMsg.text = streamingText.value
-          } else {
-            messages.value.push({
-              role: 'ai',
-              text: streamingText.value,
-              timestamp: new Date(),
-              streaming: true,
-            })
-          }
+        if (streamingMsg) {
+          streamingMsg.text += msg.text
+        } else {
+          streamingMsg = pushAIMessage({ text: msg.text, streaming: true })
         }
         break
 
@@ -101,24 +100,17 @@ export function useSession() {
         break
 
       case 'text_done':
-        {
-          const streamMsg = messages.value[messages.value.length - 1]
-          if (streamMsg && streamMsg.role === 'ai' && streamMsg.streaming) {
-            streamMsg.text = msg.text
-            streamMsg.streaming = false
-            if (msg.latency) {
-              streamMsg.latency = msg.latency
-            }
-          } else {
-            messages.value.push({
-              role: 'ai',
-              text: msg.text,
-              timestamp: new Date(),
-              latency: msg.latency,
-            })
+        if (streamingMsg) {
+          streamingMsg.text = msg.text
+          streamingMsg.streaming = false
+          if (msg.latency) {
+            streamingMsg.latency = msg.latency
           }
+          streamingMsg = null
+        } else {
+          // 無音確認など、text_delta を伴わない単独の text_done
+          pushAIMessage({ text: msg.text, latency: msg.latency })
         }
-        streamingText.value = ''
 
         if (msg.audio_chunk) {
           audioPlayback.playAudio(msg.audio_chunk)
@@ -132,21 +124,16 @@ export function useSession() {
       case 'product_recommendation':
         currentProducts.value = msg.products
         {
-          const recStreamMsg = messages.value[messages.value.length - 1]
-          if (recStreamMsg && recStreamMsg.role === 'ai' && recStreamMsg.streaming) {
-            recStreamMsg.text = msg.transcript || '商品をおすすめします。'
-            recStreamMsg.streaming = false
-            recStreamMsg.products = msg.products
+          const text = msg.transcript || '商品をおすすめします。'
+          if (streamingMsg) {
+            streamingMsg.text = text
+            streamingMsg.streaming = false
+            streamingMsg.products = msg.products
           } else {
-            messages.value.push({
-              role: 'ai',
-              text: msg.transcript || '商品をおすすめします。',
-              timestamp: new Date(),
-              products: msg.products,
-            })
+            pushAIMessage({ text, products: msg.products })
           }
+          streamingMsg = null
         }
-        streamingText.value = ''
 
         if (msg.audio_chunk) {
           audioPlayback.playAudio(msg.audio_chunk)
@@ -169,6 +156,11 @@ export function useSession() {
 
       case 'clear_audio_buffer':
         audioPlayback.stopAndClear()
+        if (streamingMsg) {
+          // 中断された世代は text_done が届かないため、ここで表示を確定させる
+          streamingMsg.streaming = false
+          streamingMsg = null
+        }
         if (state.value !== 'completed') {
           state.value = 'listening'
         }
@@ -176,13 +168,10 @@ export function useSession() {
 
       case 'session_close':
         state.value = 'completed'
-        {
-          const closeStreamMsg = messages.value[messages.value.length - 1]
-          if (closeStreamMsg && closeStreamMsg.role === 'ai' && closeStreamMsg.streaming) {
-            closeStreamMsg.streaming = false
-          }
+        if (streamingMsg) {
+          streamingMsg.streaming = false
+          streamingMsg = null
         }
-        streamingText.value = ''
         clearLoadingUserMessages()
         messages.value.push({
           role: 'system',
@@ -243,7 +232,7 @@ export function useSession() {
   function connect(config?: SessionConfig, restoreId?: string) {
     messages.value = []
     currentProducts.value = []
-    streamingText.value = ''
+    streamingMsg = null
     errorMessage.value = ''
     state.value = 'idle'
     websocket.connect(config, restoreId)

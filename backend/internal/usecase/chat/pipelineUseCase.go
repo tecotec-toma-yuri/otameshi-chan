@@ -177,6 +177,8 @@ func (m *Manager) startLLMPipeline(
 
 				<-ttsDone
 
+				// 中断された世代は text_done を送らない。クライアント側は
+				// clear_audio_buffer を受けて表示を確定させる。
 				select {
 				case <-ctx.Done():
 					return
